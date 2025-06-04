@@ -30,3 +30,46 @@
 *.exe
 *.out
 *.app
+
+# CUPTI specific
+lib64/
+setup_env.sh
+
+# Build directories
+build/
+bin/
+
+# Sample executables (binaries without extensions)
+activity_trace/activity_trace
+activity_trace_async/activity_trace_async
+autorange_profiling/autoRangeSample
+callback_event/callback_event
+callback_metric/callback_metric
+callback_timestamp/callback_timestamp
+cupti_query/cupti_query
+event_multi_gpu/event_multi_gpu
+event_sampling/event_sampling
+nvlink_bandwidth/nvlink_bandwidth
+openacc_trace/openacc_trace
+pc_sampling/pc_sampling
+sass_source_map/sass_source_map
+unified_memory/unified_memory
+userrange_profiling/userRangeSample
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# CUDA specific
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+
+# System specific
+.DS_Store
+Thumbs.db
