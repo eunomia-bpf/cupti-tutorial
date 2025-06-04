@@ -23,10 +23,10 @@ ifeq ($(OS),Windows_NT)
 else
     ifeq ($(OS), Darwin)
         export DYLD_LIBRARY_PATH := $(DYLD_LIBRARY_PATH):$(LIB_PATH)
-        LIBS= -Xlinker -framework -Xlinker cuda -L $(LIB_PATH) -lcupti -lnvperf_host -lnvperf_target -L ../extensions/src/profilerhost_util -lprofilerHostUtil
+        LIBS= -Xlinker -framework -Xlinker cuda -L $(LIB_PATH) -lcupti -lnvperf_host -lnvperf_target ../extensions/src/profilerhost_util/libprofilerHostUtil.a
     else
         export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):$(LIB_PATH)
-        LIBS= -lcuda -L $(LIB_PATH) -lcupti -lnvperf_host -lnvperf_target -L ../extensions/src/profilerhost_util -lprofilerHostUtil
+        LIBS= -lcuda -L $(LIB_PATH) -lcupti -lnvperf_host -lnvperf_target ../extensions/src/profilerhost_util/libprofilerHostUtil.a
     endif
     OBJ = o
     LIBEXT = a
