@@ -33,88 +33,57 @@ ln -sf $CUDA_HOME/lib64/libcupti.so* lib64/
 ln -sf $CUDA_HOME/lib64/libnvperf_host.so* lib64/
 ln -sf $CUDA_HOME/lib64/libnvperf_target.so* lib64/
 
-# Create a dummy profilerHostUtil library for samples that need it
-# This works around compatibility issues with the extensions library
-echo "Creating placeholder profilerHostUtil library with stub functions..."
-mkdir -p lib64
-mkdir -p extensions/src/profilerhost_util
+# Get CUDA version
+CUDA_VERSION=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d. -f1)
+CUDA_MINOR=$(echo $CUDA_VERSION | cut -d. -f2)
 
-cat > dummy_profilerHostUtil.cpp << EOF
-// Dummy implementation for profilerHostUtil
-// This provides stub implementations of required functions
-#include <stdio.h>
-#include <string>
-#include <vector>
+echo "Detected CUDA version: $CUDA_VERSION (Major: $CUDA_MAJOR, Minor: $CUDA_MINOR)"
+
+# Ensure include directories exist
+mkdir -p extensions/include/profilerhost_util
+mkdir -p extensions/include/c_util
+
+# Copy the ScopeExit.h header file if it doesn't exist
+if [ ! -f "extensions/include/c_util/ScopeExit.h" ]; then
+    echo "Creating ScopeExit.h header..."
+    cat > extensions/include/c_util/ScopeExit.h << 'EOF'
+#pragma once
 #include <utility>
 
-namespace NV {
-    namespace Metric {
-        namespace Config {
-            bool GetConfigImage(std::string chipName, std::vector<std::string> metricNames, std::vector<uint8_t>& configImage) {
-                printf("STUB: GetConfigImage called\\n");
-                // Just create some dummy data in the vector
-                configImage.resize(100, 0);
-                return true;
-            }
+#define NV_ANONYMOUS_VARIABLE_DIRECT(name, line) name ## line
+#define NV_ANONYMOUS_VARIABLE_INDIRECT(name, line) NV_ANONYMOUS_VARIABLE_DIRECT(name, line)
+#define NV_ANONYMOUS_VARIABLE(name) NV_ANONYMOUS_VARIABLE_INDIRECT(name, __LINE__)
 
-            bool GetCounterDataPrefixImage(std::string chipName, std::vector<std::string> metricNames, std::vector<uint8_t>& counterDataImagePrefix) {
-                printf("STUB: GetCounterDataPrefixImage called\\n");
-                // Just create some dummy data in the vector
-                counterDataImagePrefix.resize(100, 0);
-                return true;
-            }
-        }
-
-        namespace Eval {
-            struct MetricNameValue {
-                std::string metricName;
-                int numRanges;
-                // <rangeName, metricValue> pair
-                std::vector<std::pair<std::string, double>> rangeNameMetricValueMap;
-            };
-
-            bool GetMetricGpuValue(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames, std::vector<MetricNameValue>& metricNameValueMap) {
-                printf("STUB: GetMetricGpuValue called\\n");
-                return true;
-            }
-
-            bool PrintMetricValues(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames) {
-                printf("STUB: PrintMetricValues called\\n");
-                printf("Metric values (STUB):\\n");
-                for (const auto& metricName : metricNames) {
-                    printf("  %s: 0.0\\n", metricName.c_str());
-                }
-                return true;
-            }
-        }
-
-        namespace Enum {
-            bool ListMetrics(const char* chipName, bool hideStagingMetrics) {
-                printf("STUB: ListMetrics called\\n");
-                return true;
-            }
-        }
-    }
+namespace detail {
+    template <typename F>
+    class ScopeExit {
+        F func;
+        bool active;
+    public:
+        ScopeExit(F&& f) : func(std::move(f)), active(true) {}
+        ~ScopeExit() { if (active) func(); }
+        void release() { active = false; }
+        ScopeExit(ScopeExit&& rhs) : func(std::move(rhs.func)), active(rhs.active) { rhs.release(); }
+        ScopeExit(const ScopeExit&) = delete;
+        void operator=(const ScopeExit&) = delete;
+    };
+    template <typename F>
+    ScopeExit<F> MakeScopeExit(F&& f) { return ScopeExit<F>(std::forward<F>(f)); }
+    template <typename F>
+    ScopeExit<F> MoveScopeExit(F& f) { return ScopeExit<F>(std::move(f)); }
 }
 
-extern "C" {
-    void* profilerHostUtil_placeholder() {
-        return NULL;
-    }
-}
+#define SCOPE_EXIT(func) const auto NV_ANONYMOUS_VARIABLE_INDIRECT(EXIT, __LINE__) = detail::MoveScopeExit([&](){func;})
 EOF
+fi
 
-# Compile the dummy library with C++
-g++ -std=c++11 -shared -fPIC -o lib64/libprofilerHostUtil.so dummy_profilerHostUtil.cpp
+# Build the profilerHostUtil library
+echo "Building profilerHostUtil library..."
+cd extensions && make && cd ..
 
-# Copy the library to the extensions directory
-cp lib64/libprofilerHostUtil.so extensions/src/profilerhost_util/
-
-# Create a symlink in the extensions directory
-ln -sf $(pwd)/lib64/libprofilerHostUtil.so extensions/src/profilerhost_util/libprofilerHostUtil.so
-
-# Clean up
-rm -f dummy_profilerHostUtil.cpp
+# Copy the library to lib64
+cp extensions/src/profilerhost_util/libprofilerHostUtil.* lib64/
 
 echo "Setting up environment variables..."
 # Export library path for running samples
@@ -125,6 +94,4 @@ echo "Installation completed successfully!"
 echo "To set up the environment for running samples, run:"
 echo "source setup_env.sh"
 echo ""
-echo "Note: Some advanced samples that require profilerHostUtil functionality"
-echo "will run with stub implementations that return dummy values."
-echo "Basic samples should work correctly." 
+echo "Using actual implementation of profilerHostUtil compatible with CUDA $CUDA_VERSION." 

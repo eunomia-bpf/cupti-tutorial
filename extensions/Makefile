@@ -1,8 +1,10 @@
 # Makefile for extensions directory
-# This is a dummy Makefile since we're using the stub implementation
+# This builds the profilerHostUtil library from source
 
 all:
-	@echo "Using stub implementation for profilerHostUtil"
+	@echo "Building profilerHostUtil library..."
+	cd src/profilerhost_util && $(MAKE)
 
 clean:
-	@echo "Nothing to clean" 
+	@echo "Cleaning profilerHostUtil library..."
+	cd src/profilerhost_util && $(MAKE) clean 

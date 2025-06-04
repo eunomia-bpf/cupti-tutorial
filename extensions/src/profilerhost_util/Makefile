@@ -9,19 +9,19 @@ ifndef OS
 endif
 
 ifeq ($(OS),Windows_NT)
-    export PATH := $(PATH):../../../../lib/x64
-    LIBS= -lcuda -L ../../../../lib/x64 -lnvperf_host -lnvperf_target
+    export PATH := $(PATH):../../../../lib64
+    LIBS= -lcuda -L ../../../../lib64 -lnvperf_host -lnvperf_target
     OBJ = obj
     LIBEXT = lib
     LIBPREFIX =
 else
 	NVCC_FLAGS= --std=c++11
     ifeq ($(OS), Darwin)
-        export DYLD_LIBRARY_PATH := $(DYLD_LIBRARY_PATH):../../lib/x64
-        LIBS= -Xlinker -framework -Xlinker cuda -L ../../../../lib/x64 -lnvperf_host -lnvperf_target
+        export DYLD_LIBRARY_PATH := $(DYLD_LIBRARY_PATH):../../../../lib64
+        LIBS= -Xlinker -framework -Xlinker cuda -L ../../../../lib64 -lnvperf_host -lnvperf_target
     else
-        export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):../../lib/x64
-        LIBS= -lcuda -L ../../../../lib/x64 -lnvperf_host -lnvperf_target
+        export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):../../../../lib64
+        LIBS= -lcuda -L ../../../../lib64 -lnvperf_host -lnvperf_target
     endif
     OBJ = o
     LIBEXT = a
