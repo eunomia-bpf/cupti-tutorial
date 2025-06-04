@@ -35,20 +35,86 @@ ln -sf $CUDA_HOME/lib64/libnvperf_target.so* lib64/
 
 # Create a dummy profilerHostUtil library for samples that need it
 # This works around compatibility issues with the extensions library
-echo "Creating placeholder profilerHostUtil library..."
+echo "Creating placeholder profilerHostUtil library with stub functions..."
 mkdir -p lib64
-cat > dummy_profilerHostUtil.c << EOF
-// Dummy implementation for profilerHostUtil
-// This provides a minimal implementation to allow samples to link
-#include <stdio.h>
+mkdir -p extensions/src/profilerhost_util
 
-void* profilerHostUtil_placeholder() {
-    return NULL;
+cat > dummy_profilerHostUtil.cpp << EOF
+// Dummy implementation for profilerHostUtil
+// This provides stub implementations of required functions
+#include <stdio.h>
+#include <string>
+#include <vector>
+#include <utility>
+
+namespace NV {
+    namespace Metric {
+        namespace Config {
+            bool GetConfigImage(std::string chipName, std::vector<std::string> metricNames, std::vector<uint8_t>& configImage) {
+                printf("STUB: GetConfigImage called\\n");
+                // Just create some dummy data in the vector
+                configImage.resize(100, 0);
+                return true;
+            }
+
+            bool GetCounterDataPrefixImage(std::string chipName, std::vector<std::string> metricNames, std::vector<uint8_t>& counterDataImagePrefix) {
+                printf("STUB: GetCounterDataPrefixImage called\\n");
+                // Just create some dummy data in the vector
+                counterDataImagePrefix.resize(100, 0);
+                return true;
+            }
+        }
+
+        namespace Eval {
+            struct MetricNameValue {
+                std::string metricName;
+                int numRanges;
+                // <rangeName, metricValue> pair
+                std::vector<std::pair<std::string, double>> rangeNameMetricValueMap;
+            };
+
+            bool GetMetricGpuValue(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames, std::vector<MetricNameValue>& metricNameValueMap) {
+                printf("STUB: GetMetricGpuValue called\\n");
+                return true;
+            }
+
+            bool PrintMetricValues(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames) {
+                printf("STUB: PrintMetricValues called\\n");
+                printf("Metric values (STUB):\\n");
+                for (const auto& metricName : metricNames) {
+                    printf("  %s: 0.0\\n", metricName.c_str());
+                }
+                return true;
+            }
+        }
+
+        namespace Enum {
+            bool ListMetrics(const char* chipName, bool hideStagingMetrics) {
+                printf("STUB: ListMetrics called\\n");
+                return true;
+            }
+        }
+    }
+}
+
+extern "C" {
+    void* profilerHostUtil_placeholder() {
+        return NULL;
+    }
 }
 EOF
 
-gcc -shared -fPIC -o lib64/libprofilerHostUtil.so dummy_profilerHostUtil.c
-rm -f dummy_profilerHostUtil.c
+# Compile the dummy library with C++
+g++ -std=c++11 -shared -fPIC -o lib64/libprofilerHostUtil.so dummy_profilerHostUtil.cpp
+
+# Copy the library to the extensions directory
+cp lib64/libprofilerHostUtil.so extensions/src/profilerhost_util/
+
+# Create a symlink in the extensions directory
+ln -sf $(pwd)/lib64/libprofilerHostUtil.so extensions/src/profilerhost_util/libprofilerHostUtil.so
+
+# Clean up
+rm -f dummy_profilerHostUtil.cpp
 
 echo "Setting up environment variables..."
 # Export library path for running samples
@@ -60,5 +126,5 @@ echo "To set up the environment for running samples, run:"
 echo "source setup_env.sh"
 echo ""
 echo "Note: Some advanced samples that require profilerHostUtil functionality"
-echo "may have limited functionality due to compatibility issues."
+echo "will run with stub implementations that return dummy values."
 echo "Basic samples should work correctly." 

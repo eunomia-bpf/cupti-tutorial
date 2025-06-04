@@ -102,16 +102,16 @@ getTimestampCallback(void *userdata, CUpti_CallbackDomain domain,
       }
         
       // Collect timestamp for API start
-      cuptiErr = cuptiDeviceGetTimestamp(cbInfo->context, &startTimestamp);
-      CHECK_CUPTI_ERROR(cuptiErr, "cuptiDeviceGetTimestamp");
+      cuptiErr = cuptiGetTimestamp(&startTimestamp);
+      CHECK_CUPTI_ERROR(cuptiErr, "cuptiGetTimestamp");
             
       traceData->startTimestamp = startTimestamp;
     }
 
     if (cbInfo->callbackSite == CUPTI_API_EXIT) {
       // Collect timestamp for API exit
-      cuptiErr = cuptiDeviceGetTimestamp(cbInfo->context, &endTimestamp);
-      CHECK_CUPTI_ERROR(cuptiErr, "cuptiDeviceGetTimestamp");
+      cuptiErr = cuptiGetTimestamp(&endTimestamp);
+      CHECK_CUPTI_ERROR(cuptiErr, "cuptiGetTimestamp");
             
       traceData->endTimestamp = endTimestamp;
      

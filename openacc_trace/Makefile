@@ -28,6 +28,10 @@ endif
 export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):$(LIB_PATH)
 TRACE_LIB = libopenacc_trace.so
 
+# Check if PGI compiler is available
+PGC_EXISTS := $(shell which $(PGCPP) > /dev/null 2>&1 && echo 1 || echo 0)
+
+ifeq ($(PGC_EXISTS), 1)
 all: openacc_app
 
 $(TRACE_LIB): openacc_trace.cpp
@@ -43,4 +47,12 @@ run: $(TRACE_LIB) openacc_app
 
 clean:
 	rm -f $(TRACE_LIB) openacc_app
+else
+all:
+	@echo "PGI compiler (pgc++) not found. Skipping openacc_trace build."
+	@echo "To build this sample, install the NVIDIA HPC SDK which includes the PGI compiler."
+
+clean:
+	@echo "Nothing to clean"
+endif
 

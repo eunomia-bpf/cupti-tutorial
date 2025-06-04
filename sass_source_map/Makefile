@@ -33,7 +33,7 @@ sass_source_map: sass_source_map.$(OBJ)
 	nvcc -o $@ sass_source_map.$(OBJ) $(LIBS)
 
 sass_source_map.$(OBJ): sass_source_map.cu
-	nvcc -arch=sm_30 -lineinfo  -c $(INCLUDES) $<
+	nvcc -arch=sm_70 -lineinfo  -c $(INCLUDES) $<
 
 run: sass_source_map
 	./$<
