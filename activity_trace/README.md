@@ -1,68 +1,148 @@
-# Activity Trace Sample
+# CUPTI Activity Trace Tutorial
 
-This sample demonstrates how to use the CUPTI Activity API to collect a trace of CUDA API and GPU activities.
+## Introduction
 
-## Overview
+Profiling CUDA applications is essential for understanding their performance characteristics. The CUPTI Activity API provides a powerful way to collect detailed traces of both CUDA API calls and GPU activities. This tutorial explains how to use CUPTI to gather and analyze this data.
 
-The CUPTI Activity API enables the collection of CUDA API and GPU activity records. This sample shows how to:
+## What You'll Learn
 
-1. Initialize and finalize CUPTI activity tracing
-2. Set up activity record buffers
-3. Process activity records as they are completed
-4. Print detailed information about various activities:
-   - Device information
-   - Memory copies (memcpy)
-   - Memory sets (memset)
-   - Kernel executions
-   - CUDA API calls
-   - CUDA runtime events
-   - And more
+- How to initialize the CUPTI Activity API
+- Setting up and managing activity record buffers
+- Processing activity records from multiple sources
+- Interpreting activity data for optimization
 
-## Key Concepts
+## Code Walkthrough
 
-The sample demonstrates these key concepts:
+### 1. Setting Up Activity Tracing
 
-- **Activity Record Buffers**: Requesting and handling activity buffers
-- **Buffer Callbacks**: Setting up buffer request and completion callbacks
-- **Record Processing**: Parsing and interpreting activity records
-- **Timestamp Normalization**: Normalizing timestamps for clearer output
+The core of the activity tracing system revolves around buffer management. CUPTI requests buffers to store activity records and notifies when those buffers are filled.
 
-## Implementation Details
-
-The code includes:
-
-1. **Buffer Management**:
-   - `bufferRequested()`: Callback for when CUPTI requests a buffer
-   - `bufferCompleted()`: Callback for when CUPTI completes a buffer
-
-2. **Activity Processing**:
-   - `printActivity()`: Processes and prints different types of activity records
-   - Handles various record types like device information, memory operations, kernel launches, etc.
-
-3. **Tracing Control**:
-   - `initTrace()`: Sets up activity tracing
-   - `finiTrace()`: Cleans up and processes any remaining activity records
-
-4. **Sample Kernel**:
-   - Uses a simple vector addition kernel (`vec.cu`) to demonstrate activity tracing
-
-## Building and Running
-
-To build the sample:
-
-```bash
-make
+```cpp
+// Buffer request callback - called when CUPTI needs a new buffer
+static void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size, size_t *maxNumRecords)
+{
+  // Allocate buffer for CUPTI records
+  *size = BUF_SIZE;
+  *buffer = (uint8_t *)malloc(*size + ALIGN_SIZE);
+  
+  // Ensure buffer is properly aligned
+  *buffer = ALIGN_BUFFER(*buffer, ALIGN_SIZE);
+  *maxNumRecords = 0;
+}
 ```
 
-To run the sample:
+This function allocates memory when CUPTI requests a buffer to store activity records. The alignment is important for performance.
 
-```bash
-./activity_trace
+### 2. Processing Completed Buffers
+
+```cpp
+// Buffer completion callback - called when CUPTI has filled a buffer
+static void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId, uint8_t *buffer, size_t size, size_t validSize)
+{
+  CUpti_Activity *record = NULL;
+  
+  // Process all records in the buffer
+  CUptiResult status = CUPTI_SUCCESS;
+  while (validSize > 0) {
+    status = cuptiActivityGetNextRecord(buffer, validSize, &record);
+    if (status == CUPTI_SUCCESS) {
+      printActivity(record);
+      validSize -= record->common.size;
+      buffer += record->common.size;
+    }
+    else
+      break;
+  }
+  
+  free(buffer);
+}
 ```
 
-## Output
+When CUPTI fills a buffer with activity data, this callback processes each record and then frees the buffer.
 
-The sample produces output similar to the following:
+### 3. Activity Record Processing
+
+The `printActivity` function is the heart of the analysis, interpreting different types of activities:
+
+```cpp
+static void printActivity(CUpti_Activity *record)
+{
+  switch (record->kind) {
+  case CUPTI_ACTIVITY_KIND_DEVICE:
+    // Print device information
+    ...
+  case CUPTI_ACTIVITY_KIND_MEMCPY:
+    // Print memory copy details
+    ...
+  case CUPTI_ACTIVITY_KIND_KERNEL:
+    // Print kernel execution details
+    ...
+    
+  // Many more activity types...
+  }
+}
+```
+
+Each activity type provides different insights:
+- Device activities show hardware capabilities
+- Memory copy activities reveal data transfer patterns and times
+- Kernel activities show execution time and parameters
+
+### 4. Initialization and Cleanup
+
+```cpp
+void initTrace()
+{
+  // Register callbacks for buffer management
+  CUPTI_CALL(cuptiActivityRegisterCallbacks(bufferRequested, bufferCompleted));
+  
+  // Enable various activity kinds
+  CUPTI_CALL(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_DEVICE));
+  CUPTI_CALL(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONTEXT));
+  CUPTI_CALL(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+  // ... more activity kinds ...
+  
+  // Capture timestamp for normalizing times
+  CUPTI_CALL(cuptiGetTimestamp(&startTimestamp));
+}
+
+void finiTrace()
+{
+  // Flush any remaining data
+  CUPTI_CALL(cuptiActivityFlushAll(0));
+}
+```
+
+The initialization function enables specific activity kinds that you want to monitor and registers the callbacks. The cleanup function ensures all data is processed.
+
+### 5. The Test Kernel
+
+The sample uses a simple vector addition kernel (in `vec.cu`) to generate activities to trace:
+
+```cpp
+__global__ void vecAdd(const float *A, const float *B, float *C, int numElements)
+{
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+  if (i < numElements)
+    C[i] = A[i] + B[i];
+}
+```
+
+## Running the Sample
+
+1. Build the sample:
+   ```bash
+   make
+   ```
+
+2. Run the activity trace:
+   ```bash
+   ./activity_trace
+   ```
+
+## Understanding the Output
+
+The output shows a chronological trace of activities:
 
 ```
 DEVICE Device Name (0), capability 7.0, global memory (bandwidth 900 GB/s, size 16000 MB), multiprocessors 80, clock 1530 MHz
@@ -71,12 +151,29 @@ DRIVER_API cuCtxCreate [ 10223 - 15637 ]
 MEMCPY HtoD [ 22500 - 23012 ] device 0, context 1, stream 7, correlation 1/1
 KERNEL "vecAdd" [ 32058 - 35224 ] device 0, context 1, stream 7, correlation 2
 MEMCPY DtoH [ 40388 - 41002 ] device 0, context 1, stream 7, correlation 3/3
-...
 ```
 
-Each line represents a different activity record with details about the activity type, timing, and context.
+Let's decode this:
+1. **Device information**: Shows GPU capabilities
+2. **Context creation**: CUDA context initialization
+3. **Memory copies**: 
+   - `HtoD` (Host to Device) shows data being uploaded to the GPU
+   - `DtoH` (Device to Host) shows results being downloaded
+4. **Kernel execution**: Shows the execution time of our vector addition
 
-## See Also
+The timestamps (in brackets) are normalized to the start of tracing, making it easy to see the relative timing of operations.
 
-- [CUPTI Activity API Documentation](https://docs.nvidia.com/cuda/cupti/modules.html#group__CUPTI__ACTIVITY__API)
-- Other activity-related samples: activity_trace_async, autorange_profiling, userrange_profiling 
+## Performance Insights
+
+With this trace data, you can:
+- Identify bottlenecks in memory transfers
+- Determine kernel execution efficiency
+- Find synchronization points and their impact
+- Measure the overhead of CUDA API calls
+
+## Next Steps
+
+- Try modifying the vector size to see how it affects performance
+- Enable additional activity kinds to gather more detailed information
+- Compare the timings of different GPU operations in your own applications
+- Explore CUPTI's other activity-based samples for more advanced tracing 
