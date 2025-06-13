@@ -1,292 +1,382 @@
 /*
- * Copyright 2011-2017 NVIDIA Corporation. All rights reserved
+ * Copyright 2011-2022 NVIDIA Corporation. All rights reserved
  *
  * Sample app to demonstrate use of CUPTI library to obtain profiler
  * event values by sampling.
  */
 
-
 #ifdef _WIN32
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #endif
 
+// System headers
 #include <stdio.h>
+#include <stdlib.h>
+
+// CUDA headers
 #include <cuda_runtime_api.h>
+
+// CUPTI headers
 #include <cupti_events.h>
+#include "helper_cupti.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 #endif
 
-#define CHECK_CU_ERROR(err, cufunc)                                     \
-  if (err != CUDA_SUCCESS)                                              \
-    {                                                                   \
-      printf ("Error %d for CUDA Driver API function '%s'.\n",          \
-              err, cufunc);                                             \
-      exit(-1);                                                         \
-    }
-
-#define CHECK_CUPTI_ERROR(err, cuptifunc)                       \
-  if (err != CUPTI_SUCCESS)                                     \
-    {                                                           \
-      const char *errstr;                                       \
-      cuptiGetResultString(err, &errstr);                       \
-      printf ("%s:%d:Error %s for CUPTI API function '%s'.\n",  \
-              __FILE__, __LINE__, errstr, cuptifunc);           \
-      exit(-1);                                                 \
-    }
-
+// Macros
 #define EVENT_NAME "inst_executed"
 #define N 100000
-#define ITERATIONS 2000
+#define ITERATIONS 10000
 #define SAMPLE_PERIOD_MS 50
 
-// used to signal from the compute thread to the sampling thread
+// Global variables
+#ifdef _WIN32
+HANDLE semaphore;
+DWORD ret;
+#else
+sem_t semaphore;
+int ret;
+#endif
+
+// Used to signal from the compute thread to the sampling thread.
 static volatile int testComplete = 0;
 
 static CUcontext context;
 static CUdevice device;
-static const char *eventName;
+static const char *s_pEventName;
 
-// Device code
-__global__ void VecAdd(const int* A, const int* B, int* C, int size)
+// Kernels
+__global__ void
+VectorAdd(
+    const int *pA,
+    const int *pB,
+    int *pC,
+    int size)
 {
-  int i = blockDim.x * blockIdx.x + threadIdx.x;
-  for(int n = 0 ; n < 100; n++) {
-    if (i < size)
-      C[i] = A[i] + B[i];
-  }
+    int i = blockDim.x * blockIdx.x + threadIdx.x;
+    for (int n = 0 ; n < 100; n++)
+    {
+        if (i < size)
+        {
+            pC[i] = pA[i] + pB[i];
+        }
+    }
 }
 
+// Functions
 static void
-initVec(int *vec, int n)
+InitializeVector(
+    int *pVector,
+    int n)
 {
-  for (int i=0; i< n; i++)
-    vec[i] = i;
+    for (int i = 0; i < n; i++)
+    {
+        pVector[i] = i;
+    }
 }
 
 void *
-sampling_func(void *arg)
+DoSampling(
+    void *arg)
 {
-  CUptiResult cuptiErr;
-  CUpti_EventGroup eventGroup;
-  CUpti_EventID eventId;
-  size_t bytesRead, valueSize;
-  uint32_t numInstances = 0, j = 0;
-  uint64_t *eventValues = NULL, eventVal = 0;
-  uint32_t profile_all = 1;
+    CUpti_EventGroup eventGroup;
+    CUpti_EventID eventId;
+    size_t bytesRead, valueSize;
+    uint32_t numInstances = 0, j = 0;
+    uint64_t *pEventValues = NULL, eventValue = 0;
+    uint32_t profileAll = 1;
 
-  cuptiErr = cuptiSetEventCollectionMode(context,
-                                         CUPTI_EVENT_COLLECTION_MODE_CONTINUOUS);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiSetEventCollectionMode");
+    CUPTI_API_CALL(cuptiSetEventCollectionMode(context, CUPTI_EVENT_COLLECTION_MODE_CONTINUOUS));
 
-  cuptiErr = cuptiEventGroupCreate(context, &eventGroup, 0);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupCreate");
+    CUPTI_API_CALL(cuptiEventGroupCreate(context, &eventGroup, 0));
 
-  cuptiErr = cuptiEventGetIdFromName(device, eventName, &eventId);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGetIdFromName");
+    CUPTI_API_CALL(cuptiEventGetIdFromName(device, s_pEventName, &eventId));
 
-  cuptiErr = cuptiEventGroupAddEvent(eventGroup, eventId);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupAddEvent");
+    CUPTI_API_CALL(cuptiEventGroupAddEvent(eventGroup, eventId));
 
-  cuptiErr = cuptiEventGroupSetAttribute(eventGroup,
-                                         CUPTI_EVENT_GROUP_ATTR_PROFILE_ALL_DOMAIN_INSTANCES,
-                                         sizeof(profile_all), &profile_all);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupSetAttribute");
+    CUPTI_API_CALL(cuptiEventGroupSetAttribute(eventGroup, CUPTI_EVENT_GROUP_ATTR_PROFILE_ALL_DOMAIN_INSTANCES, sizeof(profileAll), &profileAll));
 
-  cuptiErr = cuptiEventGroupEnable(eventGroup);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupEnable");
+    CUPTI_API_CALL(cuptiEventGroupEnable(eventGroup));
 
-  valueSize = sizeof(numInstances);
-  cuptiErr = cuptiEventGroupGetAttribute(eventGroup,
-                                         CUPTI_EVENT_GROUP_ATTR_INSTANCE_COUNT,
-                                         &valueSize, &numInstances);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupGetAttribute");
+    valueSize = sizeof(numInstances);
+    CUPTI_API_CALL(cuptiEventGroupGetAttribute(eventGroup, CUPTI_EVENT_GROUP_ATTR_INSTANCE_COUNT, &valueSize, &numInstances));
 
-  bytesRead = sizeof(uint64_t) * numInstances;
-  eventValues = (uint64_t *) malloc(bytesRead);
-  if (eventValues == NULL) {
-      printf("%s:%d: Failed to allocate memory.\n", __FILE__, __LINE__);
-      exit(-1);
-  }
+    bytesRead = sizeof(uint64_t) * numInstances;
+    pEventValues = (uint64_t *)malloc(bytesRead);
+    MEMORY_ALLOCATION_CALL(pEventValues);
 
-  while (!testComplete) {
-    cuptiErr = cuptiEventGroupReadEvent(eventGroup,
-                                        CUPTI_EVENT_READ_FLAG_NONE,
-                                        eventId, &bytesRead, eventValues);
-    CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupReadEvent");
-    if (bytesRead != (sizeof(uint64_t) * numInstances)) {
-      printf("Failed to read value for \"%s\"\n", eventName);
-      exit(-1);
-    }
-
-    for (j = 0; j < numInstances; j++) {
-      eventVal += eventValues[j];
-    }
-    printf("%s: %llu\n", eventName, (unsigned long long)eventVal);
+    // Release the semaphore as sampling thread is ready to read events.
 #ifdef _WIN32
-    Sleep(SAMPLE_PERIOD_MS);
+    ret = ReleaseSemaphore(semaphore, 1, NULL);
+    if (ret == 0)
+    {
+        printf("Error: Failed to release the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
 #else
-    usleep(SAMPLE_PERIOD_MS * 1000);
+    ret = sem_post(&semaphore);
+    if (ret != 0)
+    {
+        printf("Error: Failed to release the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
 #endif
-  }
 
-  cuptiErr = cuptiEventGroupDisable(eventGroup);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupDisable");
+    do
+    {
+        CUPTI_API_CALL(cuptiEventGroupReadEvent(eventGroup, CUPTI_EVENT_READ_FLAG_NONE, eventId, &bytesRead, pEventValues));
 
-  cuptiErr = cuptiEventGroupDestroy(eventGroup);
-  CHECK_CUPTI_ERROR(cuptiErr, "cuptiEventGroupDestroy");
+        if (bytesRead != (sizeof(uint64_t) * numInstances))
+        {
+            printf("Error: Failed to read value for \"%s\"\n", s_pEventName);
+            exit(EXIT_FAILURE);
+        }
 
-  free(eventValues);
-  return NULL;
+        for (j = 0; j < numInstances; j++)
+        {
+            eventValue += pEventValues[j];
+        }
+        printf("%s: %llu\n", s_pEventName, (unsigned long long)eventValue);
+
+#ifdef _WIN32
+        Sleep(SAMPLE_PERIOD_MS);
+#else
+        usleep(SAMPLE_PERIOD_MS * 1000);
+#endif
+    }
+    while (!testComplete);
+
+    CUPTI_API_CALL(cuptiEventGroupDisable(eventGroup));
+
+    CUPTI_API_CALL(cuptiEventGroupDestroy(eventGroup));
+
+    free(pEventValues);
+
+    return NULL;
 }
 
 static void
-compute(int iters)
+DoCompute(
+    int iters)
 {
-  size_t size = N * sizeof(int);
-  int threadsPerBlock = 0;
-  int blocksPerGrid = 0;
-  int sum, i;
-  int *h_A, *h_B, *h_C;
-  int *d_A, *d_B, *d_C;
+    size_t size = N * sizeof(int);
+    int threadsPerBlock = 0;
+    int blocksPerGrid = 0;
+    int sum, i;
+    int *pHostA, *pHostB, *pHostC;
+    int *pDeviceA, *pDeviceB, *pDeviceC;
 
-  // Allocate input vectors h_A and h_B in host memory
-  h_A = (int*)malloc(size);
-  h_B = (int*)malloc(size);
-  h_C = (int*)malloc(size);
+    // Allocate input vectors pHostA and pHostB in host memory.
+    pHostA = (int *)malloc(size);
+    MEMORY_ALLOCATION_CALL(pHostA);
 
-  // Initialize input vectors
-  initVec(h_A, N);
-  initVec(h_B, N);
-  memset(h_C, 0, size);
+    pHostB = (int *)malloc(size);
+    MEMORY_ALLOCATION_CALL(pHostB);
 
-  // Allocate vectors in device memory
-  cudaMalloc((void**)&d_A, size);
-  cudaMalloc((void**)&d_B, size);
-  cudaMalloc((void**)&d_C, size);
+    pHostC = (int *)malloc(size);
+    MEMORY_ALLOCATION_CALL(pHostC);
 
-  // Copy vectors from host memory to device memory
-  cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
+    // Initialize input vectors.
+    InitializeVector(pHostA, N);
+    InitializeVector(pHostB, N);
+    memset(pHostC, 0, size);
 
-  // Invoke kernel (multiple times to make sure we have time for
-  // sampling)
-  threadsPerBlock = 256;
-  blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
-  for (i = 0; i < iters; i++) {
-    VecAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
-  }
+    // Allocate vectors in device memory.
+    RUNTIME_API_CALL(cudaMalloc((void **)&pDeviceA, size));
+    RUNTIME_API_CALL(cudaMalloc((void **)&pDeviceB, size));
+    RUNTIME_API_CALL(cudaMalloc((void **)&pDeviceC, size));
 
+    // Copy vectors from host memory to device memory.
+    RUNTIME_API_CALL(cudaMemcpy(pDeviceA, pHostA, size, cudaMemcpyHostToDevice));
+    RUNTIME_API_CALL(cudaMemcpy(pDeviceB, pHostB, size, cudaMemcpyHostToDevice));
 
-  // Copy result from device memory to host memory
-  // h_C contains the result in host memory
-  cudaMemcpy(h_C, d_C, size, cudaMemcpyDeviceToHost);
-
-  // Verify result
-  for (i = 0; i < N; ++i) {
-    sum = h_A[i] + h_B[i];
-    if (h_C[i] != sum) {
-      printf("kernel execution FAILED\n");
-      exit(-1);
+    // Invoke kernel. (Multiple times to make sure we have time for
+    // sampling.)
+    threadsPerBlock = 256;
+    blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    for (i = 0; i < iters; i++)
+    {
+        VectorAdd <<< blocksPerGrid, threadsPerBlock >>> (pDeviceA, pDeviceB, pDeviceC, N);
+        RUNTIME_API_CALL(cudaGetLastError());
     }
-  }
 
-  cudaFree(d_A);
-  cudaFree(d_B);
-  cudaFree(d_C);
-  free(h_A);
-  free(h_B);
-  free(h_C);
+    // Copy result from device memory to host memory.
+    // pHostC contains the result in host memory.
+    RUNTIME_API_CALL(cudaMemcpy(pHostC, pDeviceC, size, cudaMemcpyDeviceToHost));
+
+    // Verify result
+    for (i = 0; i < N; ++i)
+    {
+        sum = pHostA[i] + pHostB[i];
+        if (pHostC[i] != sum)
+        {
+            printf("Error: Kernel execution failed.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Free host memory.
+    if (pHostA)
+    {
+        free(pHostA);
+    }
+    if (pHostB)
+    {
+        free(pHostB);
+    }
+    if (pHostC)
+    {
+        free(pHostC);
+    }
+
+    // Free device memory.
+    if (pDeviceA)
+    {
+        RUNTIME_API_CALL(cudaFree(pDeviceA));
+    }
+    if (pDeviceB)
+    {
+        RUNTIME_API_CALL(cudaFree(pDeviceB));
+    }
+    if (pDeviceC)
+    {
+        RUNTIME_API_CALL(cudaFree(pDeviceC));
+    }
 }
 
 int
 main(int argc, char *argv[])
 {
 #ifdef _WIN32
-  HANDLE hThread;
+    HANDLE hThread;
 #else
-  int status;
-  pthread_t pThread;
+    int status;
+    pthread_t pThread;
 #endif
-  CUresult err;
-  int deviceNum;
-  int deviceCount;
-  char deviceName[32];
+    int deviceNum;
+    int deviceCount;
+    char deviceName[256];
+    int major;
+    int minor;
 
-  printf("Usage: %s [device_num] [event_name]\n", argv[0]);
+    printf("Usage: %s [device_num] [event_name]\n", argv[0]);
 
-  err = cuInit(0);
-  CHECK_CU_ERROR(err, "cuInit");
+    DRIVER_API_CALL(cuInit(0));
 
-  err = cuDeviceGetCount(&deviceCount);
-  CHECK_CU_ERROR(err, "cuDeviceGetCount");
+    DRIVER_API_CALL(cuDeviceGetCount(&deviceCount));
+    if (deviceCount == 0)
+    {
+        printf("Error: There is no device supporting CUDA.\n");
+        exit(EXIT_WAIVED);
+    }
 
-  if (deviceCount == 0) {
-    printf("There is no device supporting CUDA.\n");
-    exit(-1);
-  }
+    if (argc > 1)
+    {
+        deviceNum = atoi(argv[1]);
+    }
+    else
+    {
+        deviceNum = 0;
+    }
+    printf("CUDA Device Number: %d\n", deviceNum);
 
-  if (argc > 1)
-    deviceNum = atoi(argv[1]);
-  else
-    deviceNum = 0;
-  printf("CUDA Device Number: %d\n", deviceNum);
+    DRIVER_API_CALL(cuDeviceGet(&device, deviceNum));
+    DRIVER_API_CALL(cuDeviceGetName(deviceName, 256, device));
+    printf("CUDA Device Name: %s\n", deviceName);
 
-  err = cuDeviceGet(&device, deviceNum);
-  CHECK_CU_ERROR(err, "cuDeviceGet");
+    DRIVER_API_CALL(cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    DRIVER_API_CALL(cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    printf("Compute Capability of Device: %d.%d\n", major,minor);
 
-  err = cuDeviceGetName(deviceName, 32, device);
-  CHECK_CU_ERROR(err, "cuDeviceGetName");
+    int deviceComputeCapability = 10 * major + minor;
+    if (deviceComputeCapability > 72)
+    {
+        printf("Warning: Sample unsupported on Device with compute capability > 7.2\n");
+        exit(EXIT_WAIVED);
+    }
 
-  printf("CUDA Device Name: %s\n", deviceName);
+    if (argc > 2)
+    {
+        s_pEventName = argv[2];
+    }
+    else
+    {
+        s_pEventName = EVENT_NAME;
+    }
 
-  if (argc > 2) {
-    eventName = argv[2];
-  }
-  else {
-    eventName = EVENT_NAME;
-  }
+    DRIVER_API_CALL(cuCtxCreate(&context, 0, device));
 
-  err = cuCtxCreate(&context, 0, device);
-  CHECK_CU_ERROR(err, "cuCtxCreate");
-
-
-  testComplete = 0;
-
-  printf("Creating sampling thread\n");
+    // Create semaphore.
 #ifdef _WIN32
-  hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) sampling_func,
-                         NULL, 0, NULL );
-  if (!hThread) {
-    printf("CreateThread failed\n");
-    exit(-1);
-  }
+    semaphore = CreateSemaphore(NULL, 0, 10, NULL);
+    if (semaphore == NULL)
+    {
+        printf("Error: Failed to create the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
 #else
-  status = pthread_create(&pThread, NULL, sampling_func, NULL);
-  if (status != 0) {
-    perror("pthread_create");
-    exit(-1);
-  }
+    ret = sem_init(&semaphore, 0, 0);
+    if (ret != 0) {
+        printf("Error: Failed to create the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
 #endif
 
-  // run kernel while sampling
-  compute(ITERATIONS);
+    testComplete = 0;
 
-  // "signal" the sampling thread to exit and wait for it
-  testComplete = 1;
+    printf("Creating sampling thread\n");
 #ifdef _WIN32
-  WaitForSingleObject(hThread, INFINITE);
+    hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE) DoSampling, NULL, 0, NULL );
+    if (!hThread)
+    {
+        printf("Error: CreateThread failed.\n");
+        exit(EXIT_FAILURE);
+    }
 #else
-  pthread_join(pThread, NULL);
+    status = pthread_create(&pThread, NULL, DoSampling, NULL);
+    if (status != 0)
+    {
+        perror("pthread_create");
+        exit(EXIT_FAILURE);
+    }
 #endif
 
-  cudaDeviceSynchronize();
-  return 0;
+    // Wait for sampling thread to be ready for event collection
+#ifdef _WIN32
+    ret = WaitForSingleObject(semaphore, INFINITE);
+    if (ret != WAIT_OBJECT_0)
+    {
+        printf("Error: Failed to wait for the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
+#else
+    ret = sem_wait(&semaphore);
+    if (ret != 0)
+    {
+        printf("Error: Failed to wait for the semaphore.\n");
+        exit(EXIT_FAILURE);
+    }
+#endif
+
+    // Run kernel while sampling.
+    DoCompute(ITERATIONS);
+
+    // "signal" the sampling thread to exit and wait for it.
+    testComplete = 1;
+#ifdef _WIN32
+    WaitForSingleObject(hThread, INFINITE);
+#else
+    pthread_join(pThread, NULL);
+#endif
+
+    RUNTIME_API_CALL(cudaDeviceSynchronize());
+
+    exit(EXIT_SUCCESS);
 }
-

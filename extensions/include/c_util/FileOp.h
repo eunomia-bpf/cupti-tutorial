@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <fstream>
 #include <vector>
 #include <iostream>
@@ -15,8 +16,8 @@ bool WriteBinaryFile(const char* pFileName, const std::vector<uint8_t>& data)
     }
     else
     {
-        std::cout << "Failed to open " << pFileName << "\n";
-        fclose(fp);
+        std::cout << "ERROR!! Failed to open " << pFileName << "\n";
+        std::cout << "Make sure the file or directory has write access\n";
         return false;
     }
     return true;
@@ -27,7 +28,8 @@ bool ReadBinaryFile(const char* pFileName, std::vector<uint8_t>& image)
     FILE* fp = fopen(pFileName, "rb");
     if (!fp)
     {
-        std::cout << "Failed to open " << pFileName << "\n";
+        std::cout << "ERROR!! Failed to open " << pFileName << "\n";
+        std::cout << "Make sure the file or directory has read access\n";
         return false;
     }
 

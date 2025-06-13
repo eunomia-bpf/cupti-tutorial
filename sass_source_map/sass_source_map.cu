@@ -1,270 +1,225 @@
 /*
- * Copyright 2014-2017 NVIDIA Corporation. All rights reserved
+ * Copyright 2014-2022 NVIDIA Corporation. All rights reserved
  *
  * Sample CUPTI app to print sass to source correlation
- */ 
+ */
 
+// System headers
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// CUDA headers
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cupti.h>
-#include <stdio.h>
 
-#define RUNTIME_API_CALL(apiFuncCall)                                          \
-do {                                                                           \
-    cudaError_t _status = apiFuncCall;                                         \
-    if (_status != cudaSuccess) {                                              \
-        fprintf(stderr, "%s:%d: error: function %s failed with error %s.\n",   \
-                __FILE__, __LINE__, #apiFuncCall, cudaGetErrorString(_status));\
-        exit(-1);                                                              \
-    }                                                                          \
-} while (0)
+// CUPTI headers
+#include "helper_cupti_activity.h"
 
-#define CUPTI_CALL(call)                                                    \
-  do {                                                                      \
-    CUptiResult _status = call;                                             \
-    if (_status != CUPTI_SUCCESS) {                                         \
-      const char *errstr;                                                   \
-      cuptiGetResultString(_status, &errstr);                               \
-      fprintf(stderr, "%s:%d: error: function %s failed with error %s.\n",  \
-              __FILE__, __LINE__, #call, errstr);                           \
-      exit(-1);                                                             \
-    }                                                                       \
-  } while (0)
-
-static CUpti_SubscriberHandle g_subscriber;
-
-#define BUF_SIZE (32 * 1024)
-#define ALIGN_SIZE (8)
-#define ALIGN_BUFFER(buffer, align)                                            \
-  (((uintptr_t) (buffer) & ((align)-1)) ? ((buffer) + (align) - ((uintptr_t) (buffer) & ((align)-1))) : (buffer)) 
-
-const int TILE_DIM = 32;
-const int BLOCK_ROWS = 8;
-
-__global__
-void transpose(float *d_Outdata, const float *d_Indata)
-{
-  __shared__ float tile[TILE_DIM][TILE_DIM+1];
-
-  int x = blockIdx.x * TILE_DIM + threadIdx.x;
-  int y = blockIdx.y * TILE_DIM + threadIdx.y;
-  int width = gridDim.x * TILE_DIM;
-
-  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
-    tile[threadIdx.y+j][threadIdx.x] = d_Indata[(y+j)*width + x];
-  __syncthreads();
-
-  x = blockIdx.y * TILE_DIM + threadIdx.x;
-  y = blockIdx.x * TILE_DIM + threadIdx.y;
-
-  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
-    d_Outdata[(y+j)*width + x] = tile[threadIdx.x][threadIdx.y + j];
-}
-
-static void
-printActivity(CUpti_Activity *record)
-{
-  switch (record->kind) {
-  // The activity record for source locator contains the ID for the source path,
-  // path for the file and the line number in the source.
-  case CUPTI_ACTIVITY_KIND_SOURCE_LOCATOR:
-    {
-      CUpti_ActivitySourceLocator *sourceLocator = (CUpti_ActivitySourceLocator *)record;
-      printf("SOURCE_LOCATOR SrcLctrId %d, File %s Line %d\n", sourceLocator->id, sourceLocator->fileName, sourceLocator->lineNumber);
-      break;
-    }
-  // The activity record for instruction execution corresponds to a PC of the generated code, it contains the ID for source locator
-  // the correlation ID of the kernel to which this record is associated, function ID and pc offset for the instruction.
-  case CUPTI_ACTIVITY_KIND_INSTRUCTION_EXECUTION:
-    {
-      CUpti_ActivityInstructionExecution *sourceRecord = (CUpti_ActivityInstructionExecution *)record;
-      printf("INSTRUCTION_EXECUTION srcLctr %u, corr %u, functionId %u, pc %x\n",
-        sourceRecord->sourceLocatorId, sourceRecord->correlationId, sourceRecord->functionId, 
-        sourceRecord->pcOffset);
-      // number of threads that executed this instruction and number of times the instruction was executed
-      printf("notPredOffthread_inst_executed %llu, thread_inst_executed %llu, inst_executed %u\n\n",
-        (unsigned long long)sourceRecord->notPredOffThreadsExecuted, 
-        (unsigned long long)sourceRecord->threadsExecuted, sourceRecord->executed);
-      break;
-    }
-  // function name and corresponding module information
-  case CUPTI_ACTIVITY_KIND_FUNCTION:
-    {
-      CUpti_ActivityFunction *fResult = (CUpti_ActivityFunction *)record;
-      printf("FUCTION functionId %u, moduleId %u, name %s\n",
-        fResult->id,
-        fResult->moduleId,
-        fResult->name);
-      break;
-    }
-  default:
-    printf("  <unknown>\n");
-    exit(-1);
-    break;
-  }
-}
-
-static void CUPTIAPI
-bufferRequested(uint8_t **buffer, size_t *size, size_t *maxNumRecords)
-{
-  uint8_t *b;
-
-  *size = BUF_SIZE;
-  b = (uint8_t *)malloc(*size + ALIGN_SIZE);
-
-  *buffer = ALIGN_BUFFER(b, ALIGN_SIZE);
-  *maxNumRecords = 0;
-
-  if (*buffer == NULL) {
-    printf("Error: out of memory\n");
-    exit(-1);
-  }
-}
-
-static void CUPTIAPI
-bufferCompleted(CUcontext ctx, uint32_t streamId, uint8_t *buffer, size_t size, size_t validSize)
-{
-  CUptiResult status;
-  CUpti_Activity *record = NULL;
-
-  do {
-    status = cuptiActivityGetNextRecord(buffer, validSize, &record);
-    if(status == CUPTI_SUCCESS) {
-      printActivity(record);
-    }
-    else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
-      break;
-    }
-    else {
-      CUPTI_CALL(status);
-    }
-  } while (1);
-
-  size_t dropped;
-  CUPTI_CALL(cuptiActivityGetNumDroppedRecords(ctx, streamId, &dropped));
-  if (dropped != 0) {
-    printf("Dropped %u activity records\n", (unsigned int)dropped);
-  }
-
-  free(buffer);
-}
-
+// Macros
 #define DUMP_CUBIN 0
 
-void CUPTIAPI dumpCudaModule(CUpti_CallbackId cbid, void *resourceDescriptor)
+// Global variables
+const int TileDim   = 32;
+const int BlockRows = 8;
+
+// Kernels
+__global__
+void Transpose(
+    float *pOutputData,
+    const float *pInputData)
+{
+    __shared__ float tile[TileDim][TileDim+1];
+
+    int x = blockIdx.x * TileDim + threadIdx.x;
+    int y = blockIdx.y * TileDim + threadIdx.y;
+    int width = gridDim.x * TileDim;
+
+    for (int j = 0; j < TileDim; j += BlockRows)
+    {
+        tile[threadIdx.y + j][threadIdx.x] = pInputData[(y + j) * width + x];
+    }
+    __syncthreads();
+
+    x = blockIdx.y * TileDim + threadIdx.x;
+    y = blockIdx.x * TileDim + threadIdx.y;
+
+    for (int j = 0; j < TileDim; j += BlockRows)
+    {
+        pOutputData[(y + j) * width + x] = tile[threadIdx.x][threadIdx.y + j];
+    }
+}
+
+// Functions
+static void
+DumpCudaModule(
+    CUpti_CallbackId callbackId,
+    void *pResourceDescriptor)
 {
 #if DUMP_CUBIN
-  const char *pCubin;
-  size_t cubinSize;
+    const char *pCubin;
+    size_t cubinSize;
 
-  // dump the cubin at MODULE_LOADED_STARTING
-  CUpti_ModuleResourceData *moduleResourceData = (CUpti_ModuleResourceData *)resourceDescriptor; 
+    // Dump the cubin at MODULE_LOADED_STARTING.
+    CUpti_ModuleResourceData *pModuleResourceData = (CUpti_ModuleResourceData *)pResourceDescriptor;
 #endif
 
-  if (cbid == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
+    if (callbackId == CUPTI_CBID_RESOURCE_MODULE_LOADED)
+    {
 #if DUMP_CUBIN
-    // You can use nvdisasm to dump the SASS from the cubin. 
-    // Try nvdisasm -b -fun <function_id> sass_to_source.cubin
-    pCubin = moduleResourceData->pCubin;
-    cubinSize = moduleResourceData->cubinSize;
+        // You can use nvdisasm to dump the SASS from the cubin.
+        // Try nvdisasm -b -fun <function_id> sass_to_source.cubin
+        pCubin    = pModuleResourceData->pCubin;
+        cubinSize = pModuleResourceData->cubinSize;
 
-    FILE *cubin;
-    cubin = fopen("sass_source_map.cubin", "wb");
-    fwrite(pCubin, sizeof(uint8_t), cubinSize, cubin);
-    fclose(cubin);
+        FILE *pCubinFileHandle;
+        pCubinFileHandle = fopen("sass_source_map.cubin", "wb");
+        fwrite(pCubin, sizeof(uint8_t), cubinSize, pCubinFileHandle);
+        fclose(pCubinFileHandle);
 #endif
-  }
-  else if (cbid == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING) {
-    // You can dump the cubin either at MODULE_LOADED or MODULE_UNLOAD_STARTING
-  }
+    }
+    else if (callbackId == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING)
+    {
+        // You can dump the cubin either at MODULE_LOADED or MODULE_UNLOAD_STARTING.
+    }
 }
 
 static void
-handleResource(CUpti_CallbackId cbid, const CUpti_ResourceData *resourceData)
+HandleResource(
+    CUpti_CallbackId callbackId,
+    const CUpti_ResourceData *pResourceData)
 {
-  if (cbid == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
-    dumpCudaModule(cbid, resourceData->resourceDescriptor);
-  }
-  else if (cbid == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING) {
-    dumpCudaModule(cbid, resourceData->resourceDescriptor);
-  }
+    if (callbackId == CUPTI_CBID_RESOURCE_MODULE_LOADED)
+    {
+        DumpCudaModule(callbackId, pResourceData->resourceDescriptor);
+    }
+    else if (callbackId == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING)
+    {
+        DumpCudaModule(callbackId, pResourceData->resourceDescriptor);
+    }
 }
 
-static void CUPTIAPI
-traceCallback(void *userdata, CUpti_CallbackDomain domain,
-              CUpti_CallbackId cbid, const void *cbdata)
+void CUPTIAPI
+TraceCallback(
+    void *pUserData,
+    CUpti_CallbackDomain domain,
+    CUpti_CallbackId callbackId,
+    const void *pCallbackData)
 {
-  if (domain == CUPTI_CB_DOMAIN_RESOURCE) {
-    handleResource(cbid, (CUpti_ResourceData *)cbdata);
-  }
+    // Check last error.
+    CUPTI_API_CALL(cuptiGetLastError());
+
+    switch (domain)
+    {
+        case CUPTI_CB_DOMAIN_STATE:
+            HandleDomainStateCallback(callbackId, (CUpti_StateData *)pCallbackData);
+            break;
+        case CUPTI_CB_DOMAIN_RESOURCE:
+            HandleResource(callbackId, (CUpti_ResourceData *)pCallbackData);
+            break;
+        default:
+            break;
+    }
 }
 
-void
-initTrace()
+static void
+SetupCupti()
 {
-  // do cupti calls before any CUDA call
-  CUPTI_CALL(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_INSTRUCTION_EXECUTION));
-  CUPTI_CALL(cuptiSubscribe(&g_subscriber, (CUpti_CallbackFunc)traceCallback, NULL));
-  CUPTI_CALL(cuptiEnableDomain(1, g_subscriber, CUPTI_CB_DOMAIN_RESOURCE));
-  CUPTI_CALL(cuptiActivityRegisterCallbacks(bufferRequested, bufferCompleted));
-}
+    UserData *pUserData = (UserData *)malloc(sizeof(UserData));
+    MEMORY_ALLOCATION_CALL(pUserData);
 
-void
-finiTrace() 
-{
-  CUPTI_CALL(cuptiActivityFlushAll(0));
-  CUPTI_CALL(cuptiUnsubscribe(g_subscriber));
-  CUPTI_CALL(cuptiActivityDisable(CUPTI_ACTIVITY_KIND_INSTRUCTION_EXECUTION));
+    memset(pUserData, 0, sizeof(UserData));
+    pUserData->pPostProcessActivityRecords = NULL;
+    pUserData->printActivityRecords        = 1;
+
+    // Common CUPTI Initialization.
+    InitCuptiTrace(pUserData, (void *)TraceCallback, stdout);
+
+    CUPTI_API_CALL_VERBOSE(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_INSTRUCTION_EXECUTION));
+    CUPTI_API_CALL_VERBOSE(cuptiEnableDomain(1, globals.subscriberHandle, CUPTI_CB_DOMAIN_RESOURCE));
 }
 
 int
-main(int argc, char *argv[])
+main(
+    int argc,
+    char *argv[])
 {
-  const int nx = 32;
-  const int ny = 32;
-  const int mem_size = nx*ny*sizeof(float);
-  dim3 dimGrid(nx/TILE_DIM, ny/TILE_DIM, 1);
-  dim3 dimBlock(TILE_DIM, BLOCK_ROWS, 1);
-  cudaDeviceProp g_deviceProp;
+    const int Nx = 32;
+    const int Ny = 32;
+    const int MemSize = Nx * Ny * sizeof(float);
 
-  initTrace();
+    dim3 dimGrid(Nx/TileDim, Ny/TileDim, 1);
+    dim3 dimBlock(TileDim, BlockRows, 1);
 
-  RUNTIME_API_CALL(cudaGetDeviceProperties(&g_deviceProp, 0));
-  printf("Device Name: %s\n", g_deviceProp.name);
+    cudaDeviceProp deviceProperties;
 
-  float *d_X, *d_Y;
+    printf("Warning: Source/SASS-level metrics from the cupti_activity.h header are deprecated on Volta+ GPU architectures\n"
+           "and will be removed in a future release. Additionally, these metrics are not supported on Blackwell+ GPU architectures.\n"
+           "It is recommended to transition to the SASS Metric API from the cupti_sass_metrics.h header, which is supported\n"
+           "on Volta+ GPU architectures\n\n");
 
-  float *h_X = (float*)malloc(mem_size);
-  float *h_Y = (float*)malloc(mem_size);
-  if (!(h_X && h_Y)) {
-    printf("Malloc failed\n");
-    exit(-1);
-  }
-  // initialization of host data
-  for (int j = 0; j < ny; j++) {
-    for (int i = 0; i < nx; i++) {
-      h_X[j*nx + i] = (float) (j*nx + i);
+    SetupCupti();
+
+    RUNTIME_API_CALL(cudaGetDeviceProperties(&deviceProperties, 0));
+    printf("Device Name: %s\n", deviceProperties.name);
+
+    if (deviceProperties.major > 9)
+    {
+        printf("Warning: Sample is waived on this device since it not supported on Blackwell+ GPU architectures.\n");
+        exit(EXIT_WAIVED);
     }
-  }
-  RUNTIME_API_CALL(cudaMalloc(&d_X, mem_size));
-  RUNTIME_API_CALL(cudaMalloc(&d_Y, mem_size));
 
-  RUNTIME_API_CALL(cudaMemcpy(d_X, h_X, mem_size, cudaMemcpyHostToDevice));
+    float *pDeviceA, *pDeviceB;
 
-  transpose<<<dimGrid, dimBlock>>>(d_Y, d_X);
+    float *pHostA = (float *)malloc(MemSize);
+    MEMORY_ALLOCATION_CALL(pHostA);
 
-  RUNTIME_API_CALL(cudaMemcpy(h_Y, d_Y, mem_size, cudaMemcpyDeviceToHost));
+    float *pHostB = (float *)malloc(MemSize);
+    MEMORY_ALLOCATION_CALL(pHostB);
 
-  free(h_X);
-  free(h_Y);
+    // Initialization of host data.
+    for (int j = 0; j < Ny; j++)
+    {
+        for (int i = 0; i < Nx; i++)
+        {
+            pHostA[ (j * Nx) + i] = (float) ((j * Nx) + i);
+        }
+    }
+    RUNTIME_API_CALL(cudaMalloc(&pDeviceA, MemSize));
+    RUNTIME_API_CALL(cudaMalloc(&pDeviceB, MemSize));
 
-  cudaFree(d_X);
-  cudaFree(d_Y);
+    RUNTIME_API_CALL(cudaMemcpy(pDeviceA, pHostA, MemSize, cudaMemcpyHostToDevice));
 
-  cudaDeviceSynchronize();
-  cudaDeviceReset();
+    Transpose <<< dimGrid, dimBlock >>> (pDeviceB, pDeviceA);
+    RUNTIME_API_CALL(cudaGetLastError());
 
-  finiTrace();
-  return 0;
+    RUNTIME_API_CALL(cudaMemcpy(pHostB, pDeviceB, MemSize, cudaMemcpyDeviceToHost));
+
+    // Free host memory.
+    if (pHostA)
+    {
+        free(pHostA);
+    }
+    if (pHostB)
+    {
+        free(pHostB);
+    }
+
+    // Free device memory.
+    if (pDeviceA)
+    {
+        RUNTIME_API_CALL(cudaFree(pDeviceA));
+    }
+    if (pDeviceB)
+    {
+        RUNTIME_API_CALL(cudaFree(pDeviceB));
+    }
+
+    RUNTIME_API_CALL(cudaDeviceSynchronize());
+    RUNTIME_API_CALL(cudaDeviceReset());
+
+    DeInitCuptiTrace();
+
+    exit(EXIT_SUCCESS);
 }
 

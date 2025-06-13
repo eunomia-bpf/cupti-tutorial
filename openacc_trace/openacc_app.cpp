@@ -1,67 +1,89 @@
 /*
- * Copyright 2015 NVIDIA Corporation. All rights reserved
+ * Copyright 2015-2022 NVIDIA Corporation. All rights reserved
  *
  * Sample OpenACC app computing a saxpy kernel.
  * Data collection of OpenACC records via CUPTI is implemented
  * in a shared library attached at runtime.
  */
 
+// System headers
 #include <stdio.h>
-#include <openacc.h>
 #include <assert.h>
+#include <stdlib.h>
 
-// Helper function
+// OpenAcc headers
+#include <openacc.h>
 
-static void setClear(const int n, float *a)
+// OpenACC kernels
+static void
+OpenaccKernel(
+    const int N,
+    const float A,
+    float *pX,
+    float *pY)
 {
     int i;
-    for (i = 0; i < n; ++i) {
-        a[i] = 0.0;
+#pragma acc kernels
+    for (i = 0; i < N; ++i)
+    {
+        pY[i] = A * pX[i];
     }
 }
 
-// OpenACC kernels
-
-static void openaccKernel(const int n, const float a, float *x, float *y)
+// Functions
+static void
+SetClear(
+    const int N,
+    float *pA)
 {
     int i;
-#pragma acc kernels
-    for (i = 0; i < n; ++i)
-        y[i] = a*x[i];
+    for (i = 0; i < N; ++i)
+    {
+        pA[i] = 0.0;
+    }
 }
 
-static void initVec(const int n, const float mult, float *x)
+static void
+InitializeVector(
+    const int N,
+    const float Mult,
+    float *pX)
 {
     int i;
+
     // CUPTI OpenACC only supports NVIDIA devices
 #pragma acc kernels
+
 #if (!defined(HOST_ARCH_PPC))
     assert(acc_on_device(acc_device_nvidia));
 #endif
-    for (i = 0; i < n; ++i)
-        x[i] = mult*i;
+
+    for (i = 0; i < N; ++i)
+    {
+        pX[i] = Mult * i;
+    }
 }
 
-// program main
-
-int main(int argc, char **argv)
+int
+main(
+    int argc,
+    char *argv[])
 {
     int N = 32000;
 
-    float *x = new float[N];
-    float *y = new float[N];
+    float *pX = new float[N];
+    float *pY = new float[N];
 
     // initialize data
-    initVec(N, 0.5, x);
-    setClear(N, y);
+    InitializeVector(N, 0.5, pX);
+    SetClear(N, pY);
 
     // run saxpy kernel
-    openaccKernel(N, 2.0f, x, y);
+    OpenaccKernel(N, 2.0f, pX, pY);
 
     // cleanup
-    delete[] x;
-    delete[] y;
+    delete[] pX;
+    delete[] pY;
 
-    return 0;
+    exit(EXIT_SUCCESS);
 }
-

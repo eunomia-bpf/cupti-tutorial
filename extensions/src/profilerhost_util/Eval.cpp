@@ -1,19 +1,12 @@
 #include <Eval.h>
 #include <Parser.h>
+#include <Utils.h>
 #include <nvperf_host.h>
 #include <nvperf_cuda_host.h>
 #include <nvperf_target.h>
 #include <iostream>
-#include <vector>
-#include <string>
-
-#define RETURN_IF_NVPW_ERROR(retval, actual) \
-    do { \
-        if (NVPA_STATUS_SUCCESS != actual) { \
-            fprintf(stderr, "FAILED: %s\n", #actual); \
-            return retval; \
-        } \
-    } while (0)
+#include <iomanip>
+#include <ScopeExit.h>
 
 namespace NV {
     namespace Metric {
@@ -23,286 +16,201 @@ namespace NV {
                 return metricName.substr(0, metricName.find("__", 0));
             }
 
-            bool GetMetricGpuValue(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames, std::vector<MetricNameValue>& metricNameValueMap) {
-                if (!counterDataImage.size()) {
+            bool GetMetricGpuValue( std::string chipName,
+                                    const std::vector<uint8_t>& counterDataImage,
+                                    const std::vector<std::string>& metricNames,
+                                    std::vector<MetricNameValue>& metricNameValueMap,
+                                    const uint8_t* pCounterAvailabilityImage)
+            {
+                if (!counterDataImage.size())
+                {
                     std::cout << "Counter Data Image is empty!\n";
                     return false;
                 }
 
-                // Initialize NVPERF
-                NVPW_InitializeHost_Params initParams = { NVPW_InitializeHost_Params_STRUCT_SIZE };
-                RETURN_IF_NVPW_ERROR(false, NVPW_InitializeHost(&initParams));
+                NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params calculateScratchBufferSizeParam = {NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params_STRUCT_SIZE};
+                calculateScratchBufferSizeParam.pChipName = chipName.c_str();
+                calculateScratchBufferSizeParam.pCounterAvailabilityImage = pCounterAvailabilityImage;
+                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize(&calculateScratchBufferSizeParam));
 
-                // Create RawMetricsConfig
-                NVPW_CUDA_RawMetricsConfig_Create_Params metricsContextCreateParams = { NVPW_CUDA_RawMetricsConfig_Create_Params_STRUCT_SIZE };
-                metricsContextCreateParams.activityKind = NVPA_ACTIVITY_KIND_PROFILER;
-                metricsContextCreateParams.pChipName = chipName.c_str();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_RawMetricsConfig_Create(&metricsContextCreateParams));
+                std::vector<uint8_t> scratchBuffer(calculateScratchBufferSizeParam.scratchBufferSize);
+                NVPW_CUDA_MetricsEvaluator_Initialize_Params metricEvaluatorInitializeParams = {NVPW_CUDA_MetricsEvaluator_Initialize_Params_STRUCT_SIZE};
+                metricEvaluatorInitializeParams.scratchBufferSize = scratchBuffer.size();
+                metricEvaluatorInitializeParams.pScratchBuffer = scratchBuffer.data();
+                metricEvaluatorInitializeParams.pChipName = chipName.c_str();
+                metricEvaluatorInitializeParams.pCounterAvailabilityImage = pCounterAvailabilityImage;
+                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_Initialize(&metricEvaluatorInitializeParams));
+                NVPW_MetricsEvaluator* metricEvaluator = metricEvaluatorInitializeParams.pMetricsEvaluator;
 
-                // Set up cleanup for RawMetricsConfig
-                NVPA_RawMetricsConfig* pRawMetricsConfig = metricsContextCreateParams.pRawMetricsConfig;
-                
-                // Create a scope exit handler to clean up resources
-                auto cleanupRawMetricsConfig = [&]() {
-                    NVPW_RawMetricsConfig_Destroy_Params params = { NVPW_RawMetricsConfig_Destroy_Params_STRUCT_SIZE };
-                    params.pRawMetricsConfig = pRawMetricsConfig;
-                    NVPW_RawMetricsConfig_Destroy(&params);
-                };
-
-                // Get number of ranges
                 NVPW_CounterData_GetNumRanges_Params getNumRangesParams = { NVPW_CounterData_GetNumRanges_Params_STRUCT_SIZE };
-                getNumRangesParams.pCounterDataImage = &counterDataImage[0];
+                getNumRangesParams.pCounterDataImage = counterDataImage.data();
                 RETURN_IF_NVPW_ERROR(false, NVPW_CounterData_GetNumRanges(&getNumRangesParams));
-
-                // Prepare metrics
-                std::vector<std::string> reqName;
-                reqName.resize(metricNames.size());
 
                 bool isolated = true;
                 bool keepInstances = true;
-                std::vector<const char*> metricNamePtrs;
-                metricNameValueMap.resize(metricNames.size());
-
-                for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                    NV::Metric::Parser::ParseMetricNameString(metricNames[metricIndex], &reqName[metricIndex], &isolated, &keepInstances);
-                    metricNamePtrs.push_back(reqName[metricIndex].c_str());
-                    metricNameValueMap[metricIndex].metricName = metricNames[metricIndex];
-                    metricNameValueMap[metricIndex].numRanges = getNumRangesParams.numRanges;
-                }
-
-                // Calculate scratch buffer size for the metrics evaluator
-                NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params scratchBufferSizeParams = { NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params_STRUCT_SIZE };
-                scratchBufferSizeParams.pChipName = chipName.c_str();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize(&scratchBufferSizeParams));
-
-                // Allocate scratch buffer for the metrics evaluator
-                std::vector<uint8_t> scratchBuffer(scratchBufferSizeParams.scratchBufferSize);
-
-                // Create metrics evaluator
-                NVPW_CUDA_MetricsEvaluator_Initialize_Params evalInitParams = { NVPW_CUDA_MetricsEvaluator_Initialize_Params_STRUCT_SIZE };
-                evalInitParams.pScratchBuffer = scratchBuffer.data();
-                evalInitParams.scratchBufferSize = scratchBufferSizeParams.scratchBufferSize;
-                evalInitParams.pChipName = chipName.c_str();
-                evalInitParams.pCounterDataImage = &counterDataImage[0];
-                evalInitParams.counterDataImageSize = counterDataImage.size();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_Initialize(&evalInitParams));
-
-                // Set up cleanup for MetricsEvaluator
-                NVPW_MetricsEvaluator* pMetricsEvaluator = evalInitParams.pMetricsEvaluator;
-                
-                // Create a scope exit handler to clean up resources
-                auto cleanupMetricsEvaluator = [&]() {
-                    NVPW_MetricsEvaluator_Destroy_Params params = { NVPW_MetricsEvaluator_Destroy_Params_STRUCT_SIZE };
-                    params.pMetricsEvaluator = pMetricsEvaluator;
-                    NVPW_MetricsEvaluator_Destroy(&params);
-                };
-
-                for (size_t rangeIndex = 0; rangeIndex < getNumRangesParams.numRanges; ++rangeIndex) {
-                    std::vector<const char*> descriptionPtrs;
-
-                    NVPW_Profiler_CounterData_GetRangeDescriptions_Params getRangeDescParams = { NVPW_Profiler_CounterData_GetRangeDescriptions_Params_STRUCT_SIZE };
-                    getRangeDescParams.pCounterDataImage = &counterDataImage[0];
-                    getRangeDescParams.rangeIndex = rangeIndex;
-                    RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
-                    descriptionPtrs.resize(getRangeDescParams.numDescriptions);
-
-                    getRangeDescParams.ppDescriptions = &descriptionPtrs[0];
-                    RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
-
-                    std::string rangeName;
-                    for (size_t descriptionIndex = 0; descriptionIndex < getRangeDescParams.numDescriptions; ++descriptionIndex)
-                    {
-                        if (descriptionIndex)
-                        {
-                            rangeName += "/";
-                        }
-                        rangeName += descriptionPtrs[descriptionIndex];
-                    }
-
-                    std::vector<double> gpuValues;
-                    gpuValues.resize(metricNames.size());
+                for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex)
+                {
+                    std::string reqName;
+                    NV::Metric::Parser::ParseMetricNameString(metricNames[metricIndex], &reqName, &isolated, &keepInstances);
+                    NVPW_MetricEvalRequest metricEvalRequest;
+                    NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest_Params convertMetricToEvalRequest = {NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest_Params_STRUCT_SIZE};
+                    convertMetricToEvalRequest.pMetricsEvaluator = metricEvaluator;
+                    convertMetricToEvalRequest.pMetricName = reqName.c_str();
+                    convertMetricToEvalRequest.pMetricEvalRequest = &metricEvalRequest;
+                    convertMetricToEvalRequest.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
+                    RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest(&convertMetricToEvalRequest));
                     
-                    // Create metric evaluation requests for each metric
-                    std::vector<NVPW_MetricEvalRequest> metricEvalRequests;
-                    for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                        NVPW_MetricsEvaluator_GetMetricTypeAndIndex_Params getMetricTypeParams = { NVPW_MetricsEvaluator_GetMetricTypeAndIndex_Params_STRUCT_SIZE };
-                        getMetricTypeParams.pMetricsEvaluator = pMetricsEvaluator;
-                        getMetricTypeParams.pMetricName = reqName[metricIndex].c_str();
-                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_GetMetricTypeAndIndex(&getMetricTypeParams));
-                        
-                        NVPW_MetricEvalRequest metricEvalRequest;
-                        metricEvalRequest.metricIndex = getMetricTypeParams.metricIndex;
-                        metricEvalRequest.metricType = getMetricTypeParams.metricType;
-                        // For counter metrics, use sum rollup
-                        metricEvalRequest.rollupOp = NVPW_ROLLUP_OP_SUM;
-                        // For ratio metrics, use the None submetric
-                        metricEvalRequest.submetric = NVPW_SUBMETRIC_NONE;
-                        
-                        metricEvalRequests.push_back(metricEvalRequest);
-                    }
+                    MetricNameValue metricNameValue;
+                    metricNameValue.numRanges = getNumRangesParams.numRanges;
+                    metricNameValue.metricName = metricNames[metricIndex];
+                    for (size_t rangeIndex = 0; rangeIndex < getNumRangesParams.numRanges; ++rangeIndex)
+                    {
+                        NVPW_Profiler_CounterData_GetRangeDescriptions_Params getRangeDescParams = { NVPW_Profiler_CounterData_GetRangeDescriptions_Params_STRUCT_SIZE };
+                        getRangeDescParams.pCounterDataImage = counterDataImage.data();
+                        getRangeDescParams.rangeIndex = rangeIndex;
+                        RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
+                        std::vector<const char*> descriptionPtrs(getRangeDescParams.numDescriptions);
+                        getRangeDescParams.ppDescriptions = descriptionPtrs.data();
+                        RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
 
-                    // Evaluate metrics for this range
-                    NVPW_MetricsEvaluator_EvaluateToGpuValues_Params evalToGpuParams = { NVPW_MetricsEvaluator_EvaluateToGpuValues_Params_STRUCT_SIZE };
-                    evalToGpuParams.pMetricsEvaluator = pMetricsEvaluator;
-                    evalToGpuParams.pMetricEvalRequests = metricEvalRequests.data();
-                    evalToGpuParams.numMetricEvalRequests = metricEvalRequests.size();
-                    evalToGpuParams.metricEvalRequestStructSize = sizeof(NVPW_MetricEvalRequest);
-                    evalToGpuParams.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
-                    evalToGpuParams.pCounterDataImage = &counterDataImage[0];
-                    evalToGpuParams.counterDataImageSize = counterDataImage.size();
-                    evalToGpuParams.rangeIndex = rangeIndex;
-                    evalToGpuParams.isolated = isolated;
-                    evalToGpuParams.pMetricValues = &gpuValues[0];
-                    RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_EvaluateToGpuValues(&evalToGpuParams));
+                        std::string rangeName;
+                        for (size_t descriptionIndex = 0; descriptionIndex < getRangeDescParams.numDescriptions; ++descriptionIndex)
+                        {
+                            if (descriptionIndex)
+                            {
+                                rangeName += "/";
+                            }
+                            rangeName += descriptionPtrs[descriptionIndex];
+                        }
 
-                    for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                        metricNameValueMap[metricIndex].rangeNameMetricValueMap.push_back(std::make_pair(rangeName, gpuValues[metricIndex]));
+                        NVPW_MetricsEvaluator_SetDeviceAttributes_Params setDeviceAttribParams = { NVPW_MetricsEvaluator_SetDeviceAttributes_Params_STRUCT_SIZE };
+                        setDeviceAttribParams.pMetricsEvaluator = metricEvaluator;
+                        setDeviceAttribParams.pCounterDataImage = counterDataImage.data();
+                        setDeviceAttribParams.counterDataImageSize = counterDataImage.size();
+                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_SetDeviceAttributes(&setDeviceAttribParams));
+
+                        double metricValue = 0.0;
+                        NVPW_MetricsEvaluator_EvaluateToGpuValues_Params evaluateToGpuValuesParams = { NVPW_MetricsEvaluator_EvaluateToGpuValues_Params_STRUCT_SIZE };
+                        evaluateToGpuValuesParams.pMetricsEvaluator = metricEvaluator;
+                        evaluateToGpuValuesParams.pMetricEvalRequests = &metricEvalRequest;
+                        evaluateToGpuValuesParams.numMetricEvalRequests = 1;
+                        evaluateToGpuValuesParams.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
+                        evaluateToGpuValuesParams.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
+                        evaluateToGpuValuesParams.pCounterDataImage = counterDataImage.data();
+                        evaluateToGpuValuesParams.counterDataImageSize = counterDataImage.size();
+                        evaluateToGpuValuesParams.rangeIndex = rangeIndex;
+                        evaluateToGpuValuesParams.isolated = true;
+                        evaluateToGpuValuesParams.pMetricValues = &metricValue;
+                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_EvaluateToGpuValues(&evaluateToGpuValuesParams));
+                        metricNameValue.rangeNameMetricValueMap.push_back(std::make_pair(rangeName, metricValue));
                     }
+                    metricNameValueMap.push_back(metricNameValue);
                 }
-
-                // Clean up resources
-                cleanupMetricsEvaluator();
-                cleanupRawMetricsConfig();
-
+                
+                NVPW_MetricsEvaluator_Destroy_Params metricEvaluatorDestroyParams = { NVPW_MetricsEvaluator_Destroy_Params_STRUCT_SIZE };
+                metricEvaluatorDestroyParams.pMetricsEvaluator = metricEvaluator;
+                RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_Destroy(&metricEvaluatorDestroyParams));
                 return true;
             }
 
-            bool PrintMetricValues(std::string chipName, std::vector<uint8_t> counterDataImage, std::vector<std::string> metricNames) {
-                if (!counterDataImage.size()) {
+            bool PrintMetricValues( std::string chipName, 
+                                    const std::vector<uint8_t>& counterDataImage,
+                                    const std::vector<std::string>& metricNames,
+                                    const uint8_t* pCounterAvailabilityImage)
+            {
+                if (!counterDataImage.size())
+                {
                     std::cout << "Counter Data Image is empty!\n";
                     return false;
                 }
 
-                // Initialize NVPERF
-                NVPW_InitializeHost_Params initParams = { NVPW_InitializeHost_Params_STRUCT_SIZE };
-                RETURN_IF_NVPW_ERROR(false, NVPW_InitializeHost(&initParams));
+                NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params calculateScratchBufferSizeParam = {NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params_STRUCT_SIZE};
+                calculateScratchBufferSizeParam.pChipName = chipName.c_str();
+                calculateScratchBufferSizeParam.pCounterAvailabilityImage = pCounterAvailabilityImage;
+                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize(&calculateScratchBufferSizeParam));
 
-                // Create RawMetricsConfig
-                NVPW_CUDA_RawMetricsConfig_Create_Params metricsContextCreateParams = { NVPW_CUDA_RawMetricsConfig_Create_Params_STRUCT_SIZE };
-                metricsContextCreateParams.activityKind = NVPA_ACTIVITY_KIND_PROFILER;
-                metricsContextCreateParams.pChipName = chipName.c_str();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_RawMetricsConfig_Create(&metricsContextCreateParams));
+                std::vector<uint8_t> scratchBuffer(calculateScratchBufferSizeParam.scratchBufferSize);
+                NVPW_CUDA_MetricsEvaluator_Initialize_Params metricEvaluatorInitializeParams = {NVPW_CUDA_MetricsEvaluator_Initialize_Params_STRUCT_SIZE};
+                metricEvaluatorInitializeParams.scratchBufferSize = scratchBuffer.size();
+                metricEvaluatorInitializeParams.pScratchBuffer = scratchBuffer.data();
+                metricEvaluatorInitializeParams.pChipName = chipName.c_str();
+                metricEvaluatorInitializeParams.pCounterAvailabilityImage = pCounterAvailabilityImage;
+                metricEvaluatorInitializeParams.pCounterDataImage = counterDataImage.data();
+                metricEvaluatorInitializeParams.counterDataImageSize = counterDataImage.size();
+                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_Initialize(&metricEvaluatorInitializeParams));
+                NVPW_MetricsEvaluator* metricEvaluator = metricEvaluatorInitializeParams.pMetricsEvaluator;
 
-                // Set up cleanup for RawMetricsConfig
-                NVPA_RawMetricsConfig* pRawMetricsConfig = metricsContextCreateParams.pRawMetricsConfig;
-                
-                // Create a scope exit handler to clean up resources
-                auto cleanupRawMetricsConfig = [&]() {
-                    NVPW_RawMetricsConfig_Destroy_Params params = { NVPW_RawMetricsConfig_Destroy_Params_STRUCT_SIZE };
-                    params.pRawMetricsConfig = pRawMetricsConfig;
-                    NVPW_RawMetricsConfig_Destroy(&params);
-                };
-
-                // Get number of ranges
                 NVPW_CounterData_GetNumRanges_Params getNumRangesParams = { NVPW_CounterData_GetNumRanges_Params_STRUCT_SIZE };
-                getNumRangesParams.pCounterDataImage = &counterDataImage[0];
+                getNumRangesParams.pCounterDataImage = counterDataImage.data();
                 RETURN_IF_NVPW_ERROR(false, NVPW_CounterData_GetNumRanges(&getNumRangesParams));
+
+                std::cout << "\n" << std::setw(40) << std::left << "Range Name"
+                          << std::setw(100) << std::left        << "Metric Name"
+                          << "Metric Value" << std::endl;
+                std::cout << std::setfill('-') << std::setw(160) << "" << std::setfill(' ') << std::endl;
 
                 std::string reqName;
                 bool isolated = true;
                 bool keepInstances = true;
-                std::vector<const char*> metricNamePtrs;
-                for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                    NV::Metric::Parser::ParseMetricNameString(metricNames[metricIndex], &reqName, &isolated, &keepInstances);
-                    metricNamePtrs.push_back(reqName.c_str());
-                }
+                for (std::string metricName : metricNames)
+                {
+                    NV::Metric::Parser::ParseMetricNameString(metricName, &reqName, &isolated, &keepInstances);
+                    NVPW_MetricEvalRequest metricEvalRequest;
+                    NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest_Params convertMetricToEvalRequest = {NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest_Params_STRUCT_SIZE};
+                    convertMetricToEvalRequest.pMetricsEvaluator = metricEvaluator;
+                    convertMetricToEvalRequest.pMetricName = reqName.c_str();
+                    convertMetricToEvalRequest.pMetricEvalRequest = &metricEvalRequest;
+                    convertMetricToEvalRequest.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
+                    RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_ConvertMetricNameToMetricEvalRequest(&convertMetricToEvalRequest));
 
-                // Calculate scratch buffer size for the metrics evaluator
-                NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params scratchBufferSizeParams = { NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize_Params_STRUCT_SIZE };
-                scratchBufferSizeParams.pChipName = chipName.c_str();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_CalculateScratchBufferSize(&scratchBufferSizeParams));
-
-                // Allocate scratch buffer for the metrics evaluator
-                std::vector<uint8_t> scratchBuffer(scratchBufferSizeParams.scratchBufferSize);
-
-                // Create metrics evaluator
-                NVPW_CUDA_MetricsEvaluator_Initialize_Params evalInitParams = { NVPW_CUDA_MetricsEvaluator_Initialize_Params_STRUCT_SIZE };
-                evalInitParams.pScratchBuffer = scratchBuffer.data();
-                evalInitParams.scratchBufferSize = scratchBufferSizeParams.scratchBufferSize;
-                evalInitParams.pChipName = chipName.c_str();
-                evalInitParams.pCounterDataImage = &counterDataImage[0];
-                evalInitParams.counterDataImageSize = counterDataImage.size();
-                RETURN_IF_NVPW_ERROR(false, NVPW_CUDA_MetricsEvaluator_Initialize(&evalInitParams));
-
-                // Set up cleanup for MetricsEvaluator
-                NVPW_MetricsEvaluator* pMetricsEvaluator = evalInitParams.pMetricsEvaluator;
-                
-                // Create a scope exit handler to clean up resources
-                auto cleanupMetricsEvaluator = [&]() {
-                    NVPW_MetricsEvaluator_Destroy_Params params = { NVPW_MetricsEvaluator_Destroy_Params_STRUCT_SIZE };
-                    params.pMetricsEvaluator = pMetricsEvaluator;
-                    NVPW_MetricsEvaluator_Destroy(&params);
-                };
-
-                for (size_t rangeIndex = 0; rangeIndex < getNumRangesParams.numRanges; ++rangeIndex) {
-                    std::vector<const char*> descriptionPtrs;
-
-                    NVPW_Profiler_CounterData_GetRangeDescriptions_Params getRangeDescParams = { NVPW_Profiler_CounterData_GetRangeDescriptions_Params_STRUCT_SIZE };
-                    getRangeDescParams.pCounterDataImage = &counterDataImage[0];
-                    getRangeDescParams.rangeIndex = rangeIndex;
-                    RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
-                    
-                    descriptionPtrs.resize(getRangeDescParams.numDescriptions);
-                    
-                    getRangeDescParams.ppDescriptions = &descriptionPtrs[0];
-                    RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
-
-                    std::string rangeName;
-                    for (size_t descriptionIndex = 0; descriptionIndex < getRangeDescParams.numDescriptions; ++descriptionIndex)
+                    for (size_t rangeIndex = 0; rangeIndex < getNumRangesParams.numRanges; ++rangeIndex)
                     {
-                        if (descriptionIndex)
+                        NVPW_Profiler_CounterData_GetRangeDescriptions_Params getRangeDescParams = { NVPW_Profiler_CounterData_GetRangeDescriptions_Params_STRUCT_SIZE };
+                        getRangeDescParams.pCounterDataImage = counterDataImage.data();
+                        getRangeDescParams.rangeIndex = rangeIndex;
+                        RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
+                        std::vector<const char*> descriptionPtrs(getRangeDescParams.numDescriptions);
+                        getRangeDescParams.ppDescriptions = descriptionPtrs.data();
+                        RETURN_IF_NVPW_ERROR(false, NVPW_Profiler_CounterData_GetRangeDescriptions(&getRangeDescParams));
+
+                        std::string rangeName;
+                        for (size_t descriptionIndex = 0; descriptionIndex < getRangeDescParams.numDescriptions; ++descriptionIndex)
                         {
-                            rangeName += "/";
+                            if (descriptionIndex)
+                            {
+                                rangeName += "/";
+                            }
+                            rangeName += descriptionPtrs[descriptionIndex];
                         }
-                        rangeName += descriptionPtrs[descriptionIndex];
-                    }
 
-                    std::vector<double> gpuValues;
-                    gpuValues.resize(metricNames.size());
-                    
-                    // Create metric evaluation requests for each metric
-                    std::vector<NVPW_MetricEvalRequest> metricEvalRequests;
-                    for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                        NVPW_MetricsEvaluator_GetMetricTypeAndIndex_Params getMetricTypeParams = { NVPW_MetricsEvaluator_GetMetricTypeAndIndex_Params_STRUCT_SIZE };
-                        getMetricTypeParams.pMetricsEvaluator = pMetricsEvaluator;
-                        getMetricTypeParams.pMetricName = metricNamePtrs[metricIndex];
-                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_GetMetricTypeAndIndex(&getMetricTypeParams));
+                        NVPW_MetricsEvaluator_SetDeviceAttributes_Params setDeviceAttribParams = { NVPW_MetricsEvaluator_SetDeviceAttributes_Params_STRUCT_SIZE };
+                        setDeviceAttribParams.pMetricsEvaluator = metricEvaluator;
+                        setDeviceAttribParams.pCounterDataImage = counterDataImage.data();
+                        setDeviceAttribParams.counterDataImageSize = counterDataImage.size();
+                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_SetDeviceAttributes(&setDeviceAttribParams));
+
+                        double metricValue;
+                        NVPW_MetricsEvaluator_EvaluateToGpuValues_Params evaluateToGpuValuesParams = { NVPW_MetricsEvaluator_EvaluateToGpuValues_Params_STRUCT_SIZE };
+                        evaluateToGpuValuesParams.pMetricsEvaluator = metricEvaluator;
+                        evaluateToGpuValuesParams.pMetricEvalRequests = &metricEvalRequest;
+                        evaluateToGpuValuesParams.numMetricEvalRequests = 1;
+                        evaluateToGpuValuesParams.metricEvalRequestStructSize = NVPW_MetricEvalRequest_STRUCT_SIZE;
+                        evaluateToGpuValuesParams.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
+                        evaluateToGpuValuesParams.pCounterDataImage = counterDataImage.data();
+                        evaluateToGpuValuesParams.counterDataImageSize = counterDataImage.size();
+                        evaluateToGpuValuesParams.rangeIndex = rangeIndex;
+                        evaluateToGpuValuesParams.isolated = true;
+                        evaluateToGpuValuesParams.pMetricValues = &metricValue;
+                        RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_EvaluateToGpuValues(&evaluateToGpuValuesParams));
                         
-                        NVPW_MetricEvalRequest metricEvalRequest;
-                        metricEvalRequest.metricIndex = getMetricTypeParams.metricIndex;
-                        metricEvalRequest.metricType = getMetricTypeParams.metricType;
-                        // For counter metrics, use sum rollup
-                        metricEvalRequest.rollupOp = NVPW_ROLLUP_OP_SUM;
-                        // For ratio metrics, use the None submetric
-                        metricEvalRequest.submetric = NVPW_SUBMETRIC_NONE;
-                        
-                        metricEvalRequests.push_back(metricEvalRequest);
-                    }
-
-                    // Evaluate metrics for this range
-                    NVPW_MetricsEvaluator_EvaluateToGpuValues_Params evalToGpuParams = { NVPW_MetricsEvaluator_EvaluateToGpuValues_Params_STRUCT_SIZE };
-                    evalToGpuParams.pMetricsEvaluator = pMetricsEvaluator;
-                    evalToGpuParams.pMetricEvalRequests = metricEvalRequests.data();
-                    evalToGpuParams.numMetricEvalRequests = metricEvalRequests.size();
-                    evalToGpuParams.metricEvalRequestStructSize = sizeof(NVPW_MetricEvalRequest);
-                    evalToGpuParams.metricEvalRequestStrideSize = sizeof(NVPW_MetricEvalRequest);
-                    evalToGpuParams.pCounterDataImage = &counterDataImage[0];
-                    evalToGpuParams.counterDataImageSize = counterDataImage.size();
-                    evalToGpuParams.rangeIndex = rangeIndex;
-                    evalToGpuParams.isolated = isolated;
-                    evalToGpuParams.pMetricValues = &gpuValues[0];
-                    RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_EvaluateToGpuValues(&evalToGpuParams));
-
-                    std::cout << "Range: " << rangeName << ":" << std::endl;
-                    for (size_t metricIndex = 0; metricIndex < metricNames.size(); ++metricIndex) {
-                        std::cout << "\t" << metricNames[metricIndex] << ": " << gpuValues[metricIndex] << std::endl;
+                        std::cout << std::setw(40) << std::left << rangeName << std::setw(100)
+                                  << std::left << metricName << metricValue << std::endl;
                     }
                 }
-
-                // Clean up resources
-                cleanupMetricsEvaluator();
-                cleanupRawMetricsConfig();
-
+                
+                NVPW_MetricsEvaluator_Destroy_Params metricEvaluatorDestroyParams = { NVPW_MetricsEvaluator_Destroy_Params_STRUCT_SIZE };
+                metricEvaluatorDestroyParams.pMetricsEvaluator = metricEvaluator;
+                RETURN_IF_NVPW_ERROR(false, NVPW_MetricsEvaluator_Destroy(&metricEvaluatorDestroyParams));
                 return true;
             }
         }
