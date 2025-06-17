@@ -15,7 +15,7 @@
 *.so
 *.dylib
 *.dll
-
+checkpoint_kernels/checkpoint_kernels
 # Fortran module files
 *.mod
 *.smod
