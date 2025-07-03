@@ -63,4 +63,4 @@ all: pc_sampling_continuous
 pc_sampling_continuous: pc_sampling_continuous.cpp
 	$(NVCC) $(NVCC_COMPILER) $(NVCCFLAGS) $(INCLUDES) -o $(LIBNAME) -shared $< $(LIBS)
 clean:
-	rm $(LIBNAME)
+	rm -f $(LIBNAME)

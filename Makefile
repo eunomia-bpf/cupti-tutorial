@@ -32,6 +32,10 @@ SAMPLE_DIRS = activity_trace \
               nvlink_bandwidth \
               openacc_trace \
               pc_sampling \
+              pc_sampling_continuous \
+              pc_sampling_start_stop \
+              pc_sampling_utility \
+              pm_sampling \
               sass_source_map \
               unified_memory \
               userrange_profiling

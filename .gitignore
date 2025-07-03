@@ -76,3 +76,6 @@ Thumbs.db
 
 autorange_profiling/auto_range_profiling
 userrange_profiling/user_range_profiling
+pm_sampling/pm_sampling
+pc_sampling_utility/pc_sampling_utility
+pc_sampling_start_stop/pc_sampling_start_stop
