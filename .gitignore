@@ -73,3 +73,6 @@ userrange_profiling/userRangeSample
 # System specific
 .DS_Store
 Thumbs.db
+
+autorange_profiling/auto_range_profiling
+userrange_profiling/user_range_profiling
