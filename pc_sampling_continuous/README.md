@@ -343,6 +343,10 @@ For Windows, you need to build the Microsoft Detours library first:
    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/path/to/CUPTI/lib64:/path/to/pc_sampling_continuous:/path/to/pcsamplingutil
    ```
 
+   ```bash
+   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-13.0/extras/CUPTI/lib64:/usr/local/cuda-13.0/extras/CUPTI/samples/pc_sampling_continuous:/usr/local/cuda-13.0/extras/CUPTI/samples/pc_sampling_utility
+   ```
+
 2. **Use the helper script**:
    ```bash
    ./libpc_sampling_continuous.pl --help
@@ -396,13 +400,13 @@ Use the `pc_sampling_utility` tool to parse and analyze the binary data:
 
 ```bash
 # Basic parsing
-./pc_sampling_utility --file-name pcsampling.dat
+../pc_sampling_utility/pc_sampling_utility --file-name 2_pcsampling.dat
 
 # With source correlation
-./pc_sampling_utility --file-name pcsampling.dat --enable-source-correlation
+../pc_sampling_utility/pc_sampling_utility --file-name 2_pcsampling.dat --disable-source-correlation
 
 # Verbose output
-./pc_sampling_utility --file-name pcsampling.dat --verbose
+../pc_sampling_utility/pc_sampling_utility --file-name 2_pcsampling.dat --verbose
 ```
 
 ### Example Parsed Output
