@@ -84,7 +84,7 @@ PC 连续采样与其他分析方法的不同之处在于：
 
 1. **设置库路径**：
    ```bash
-   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-13.0/extras/CUPTI/lib64:/path/to/pc_sampling_continuous:/path/to/pcsamplingutil
+   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-13.0/extras/CUPTI/lib64:/usr/local/cuda-13.0/extras/CUPTI/samples/pc_sampling_continuous:/usr/local/cuda-13.0/extras/CUPTI/samples/pc_sampling_utility
    ```
 
 2. **使用辅助脚本**：
