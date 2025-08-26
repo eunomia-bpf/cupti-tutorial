@@ -6,7 +6,7 @@
 *.lo
 *.o
 *.obj
-
+callback_profiling/callback_profiling
 # Precompiled Headers
 *.gch
 *.pch
