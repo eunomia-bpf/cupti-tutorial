@@ -10,7 +10,7 @@ callback_profiling/callback_profiling
 # Precompiled Headers
 *.gch
 *.pch
-
+sass_metrics/sass_metrics
 # Compiled Dynamic libraries
 *.so
 *.dylib
