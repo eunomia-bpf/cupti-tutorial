@@ -225,7 +225,7 @@ main(
         exit(EXIT_WAIVED);
     }
 
-    DRIVER_API_CALL(cuCtxCreate(&context, 0, dev));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&context, 0, dev));
 
     // Creating event group for profiling
     CUPTI_API_CALL(cuptiEventGroupCreate(context, &cuptiEvent.eventGroup, 0));

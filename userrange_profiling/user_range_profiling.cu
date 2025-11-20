@@ -417,7 +417,7 @@ main(
     }
 
     CUcontext cuContext;
-    DRIVER_API_CALL(cuCtxCreate(&cuContext, 0, cuDevice));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&cuContext, 0, cuDevice));
 
     // Get chip name for the cuda  device.
     CUpti_Device_GetChipName_Params getChipNameParams = { CUpti_Device_GetChipName_Params_STRUCT_SIZE };

@@ -429,7 +429,7 @@ main(int argc, char *argv[])
 
 
     CUcontext cuCtx;
-    DRIVER_API_CALL(cuCtxCreate(&cuCtx, 0, deviceNum));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&cuCtx, 0, deviceNum));
 
     if (bListMetrics){
         ListSupportedMetrics(deviceNum);

@@ -103,7 +103,7 @@ main(
     {
         RUNTIME_API_CALL(cudaSetDevice(i));
 
-        DRIVER_API_CALL(cuCtxCreate(&(context[i]), 0, device[i]));
+        DRIVER_API_CALL(COMPAT_cuCtxCreate(&(context[i]), 0, device[i]));
 
         DRIVER_API_CALL(cuCtxPopCurrent(&(context[i])));
     }

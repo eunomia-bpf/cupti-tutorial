@@ -311,7 +311,7 @@ main(int argc, char *argv[])
         s_pEventName = EVENT_NAME;
     }
 
-    DRIVER_API_CALL(cuCtxCreate(&context, 0, device));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&context, 0, device));
 
     // Create semaphore.
 #ifdef _WIN32

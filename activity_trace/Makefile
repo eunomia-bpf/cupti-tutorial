@@ -2,7 +2,7 @@
 # Copyright 2011-2013 NVIDIA Corporation. All rights reserved
 # 
 INCLUDES=-I../common
-NVCC=/usr/local/cuda-12.9/bin/nvcc
+NVCC=$(CUDA_INSTALL_PATH)/bin/nvcc
 
 ifndef OS
  OS   := $(shell uname)
