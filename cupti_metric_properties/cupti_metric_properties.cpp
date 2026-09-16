@@ -454,7 +454,7 @@ CUptiResult GetCounterAvailabilityImage(std::vector<uint8_t>& counterAvailabilit
 {
     DRIVER_API_CALL(cuInit(0));
     CUcontext ctx;
-    DRIVER_API_CALL(cuCtxCreate(&ctx, 0, 0));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&ctx, 0, 0));
 
     CUpti_Profiler_GetCounterAvailability_Params getCounterAvailabilityParams = { CUpti_Profiler_GetCounterAvailability_Params_STRUCT_SIZE };
     getCounterAvailabilityParams.ctx = ctx;

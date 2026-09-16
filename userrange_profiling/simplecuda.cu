@@ -217,7 +217,7 @@ bool runTest(int deviceNum,
     DRIVER_API_CALL(cuDeviceGet(&cuDevice, deviceNum));
 
     CUcontext cuContext;
-    DRIVER_API_CALL(cuCtxCreate(&cuContext, 0, cuDevice));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&cuContext, 0, cuDevice));
 
     CUpti_Profiler_BeginSession_Params beginSessionParams = {CUpti_Profiler_BeginSession_Params_STRUCT_SIZE};
     CUpti_Profiler_SetConfig_Params setConfigParams = {CUpti_Profiler_SetConfig_Params_STRUCT_SIZE};

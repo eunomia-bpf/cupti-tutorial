@@ -57,16 +57,14 @@ ifneq ($(TARGET_ARCH), $(HOST_ARCH))
     endif
 endif
 
-# Gencode arguments
-SMS ?= 52 53 60 61 62 70 72 75 80 86 87 89 90
-# Generate SASS code for each SM architecture listed in $(SMS)
-$(foreach sm,$(SMS),$(eval GENCODE_FLAGS += -gencode arch=compute_$(sm),code=sm_$(sm)))
+# Include common configuration for SMS architecture detection
+include ../common/common.mk
 
 pc_sampling: pc_sampling.$(OBJ)
 	$(NVCC) $(NVCC_COMPILER) $(NVCCFLAGS) -o $@ pc_sampling.$(OBJ) $(LIBS)
 
 pc_sampling.$(OBJ): pc_sampling.cu
-	$(NVCC) $(NVCC_COMPILER) $(NVCCFLAGS) -arch=sm_52 -lineinfo $(GENCODE_FLAGS) -c $(INCLUDES) $<
+	$(NVCC) $(NVCC_COMPILER) $(NVCCFLAGS) -arch=$(DEFAULT_SM_ARCH) -lineinfo $(GENCODE_FLAGS) -c $(INCLUDES) $<
 
 run: pc_sampling
 	./$<

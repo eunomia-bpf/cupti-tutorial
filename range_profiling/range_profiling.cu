@@ -159,7 +159,7 @@ int main(int argc, char *argv[])
 
     // Create a context
     CUcontext cuContext;
-    DRIVER_API_CALL(cuCtxCreate(&cuContext, 0, cuDevice));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&cuContext, 0, cuDevice));
     RangeProfilerTargetPtr pRangeProfilerTarget = std::make_shared<RangeProfilerTarget>(cuContext, config);
 
     // Get chip name

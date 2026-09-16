@@ -49,6 +49,16 @@ do                                                                              
 } while (0)
 #endif
 
+// Compatibility wrapper for cuCtxCreate API change in CUDA 13
+// CUDA 13+ requires an additional CUctxCreateParams parameter
+#if CUDA_VERSION >= 13000
+    #define COMPAT_cuCtxCreate(pctx, flags, dev) \
+        cuCtxCreate(pctx, NULL, flags, dev)
+#else
+    #define COMPAT_cuCtxCreate(pctx, flags, dev) \
+        cuCtxCreate(pctx, flags, dev)
+#endif
+
 #ifndef RUNTIME_API_CALL
 #define RUNTIME_API_CALL(apiFunctionCall)                                           \
 do                                                                                  \

@@ -614,7 +614,7 @@ main(
         // CUPTI_KernelReplay, CUPTI_UserReplay, or CUPTI_ApplicationReplay.
         config.replayMode = CUPTI_UserReplay;
         // Either set to a context, or may be NULL if a default context has been created.
-        DRIVER_API_CALL(cuCtxCreate(&(config.context), 0, device));
+        DRIVER_API_CALL(COMPAT_cuCtxCreate(&(config.context), 0, device));
         // Save this device config.
         deviceData[device].config = config;
 

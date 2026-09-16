@@ -533,7 +533,7 @@ main(
     }
 
     cuCtxGetCurrent(&cuCtx);
-    DRIVER_API_CALL(cuCtxCreate(&cuCtx, 0, deviceNum));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&cuCtx, 0, deviceNum));
 
     DoPCSampling(cuCtx);
 

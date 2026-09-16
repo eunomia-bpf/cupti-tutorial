@@ -472,7 +472,7 @@ main(
             CUPTI_API_CALL(cuptiMetricGetNumEvents(metricId[i], &numEvents[i]));
         }
 
-        DRIVER_API_CALL(cuCtxCreate(&context, 0, 0));
+        DRIVER_API_CALL(COMPAT_cuCtxCreate(&context, 0, 0));
 
         CUPTI_API_CALL(cuptiMetricCreateEventGroupSets(context, (sizeof metricId) ,metricId, &pPasses));
 

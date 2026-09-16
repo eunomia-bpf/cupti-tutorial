@@ -372,7 +372,7 @@ main(
         exit(EXIT_WAIVED);
     }
 
-    DRIVER_API_CALL(cuCtxCreate(&context, 0, device));
+    DRIVER_API_CALL(COMPAT_cuCtxCreate(&context, 0, device));
 
     // Get the name of the metric to collect
     if (argc > 2)
