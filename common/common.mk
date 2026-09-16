@@ -19,5 +19,12 @@ ifndef SMS
     endif
 endif
 
+# When SMS is supplied by the caller, DEFAULT_SM_ARCH is not set by the block
+# above. Derive it from the first requested architecture so samples that use
+# -arch=$(DEFAULT_SM_ARCH) still get a valid value.
+ifndef DEFAULT_SM_ARCH
+    DEFAULT_SM_ARCH := sm_$(firstword $(SMS))
+endif
+
 # Generate SASS code for each SM architecture listed in $(SMS)
 $(foreach sm,$(SMS),$(eval GENCODE_FLAGS += -gencode arch=compute_$(sm),code=sm_$(sm)))
